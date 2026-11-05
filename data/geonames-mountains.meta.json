@@ -1,0 +1,24 @@
+{
+  "source": "GeoNames country dumps",
+  "source_urls": [
+    "https://download.geonames.org/export/dump/CN.zip",
+    "https://download.geonames.org/export/dump/TW.zip"
+  ],
+  "license": "CC BY 4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "generated_from": [
+    {
+      "file": "peakmap-geonames-cn-complete.zip",
+      "sha256": "e8813db9f8b129d18bccbc069435305fe944e58d2baa9a24f79155f32efd1247"
+    },
+    {
+      "file": "peakmap-geonames-tw.zip",
+      "sha256": "d9876a73388696bfb62538b032d97ac712efea78d5ff389a9d4c896fc0cb5792"
+    }
+  ],
+  "note": "Chinese-name records within the project sample land boundary. Points and heights are unverified. GeoNames MT/PK represent individual mountains or peaks; MTS/RDGE are grouped as mountain labels.",
+  "counts": {
+    "peak": 4542,
+    "mountain": 257
+  }
+}
