@@ -5,6 +5,7 @@ import { lightVector, lightFactor, solarBrightness, castShadowAt, imageryShadowO
 import { sunlightAt } from './sun.js';
 import { loadTerrainBitmap } from './terrain-data.js';
 import { smoothTerrainHeights } from './terrain-smoothing.js';
+import { softenTerrainEdge } from './terrain-edge.js';
 
 // The final unnamed feature is a cartographic South China Sea inset, not land.
 export const adminAreas = {...provinces, features: provinces.features.filter(f => f.properties.name)};
@@ -32,8 +33,9 @@ function tilePolygons(z,x,y){
 export const intersectsChinaTile = (z,x,y) => tilePolygons(z,x,y).length > 0;
 const stops = [[-12000,[5,14,19]],[-1,[5,14,19]],[0,[9,22,23]],[1,[40,75,44]],[200,[55,92,49]],[700,[94,112,64]],[1500,[139,137,79]],[2500,[171,153,97]],[3500,[184,159,112]],[4500,[167,151,118]],[5500,[199,191,166]],[7000,[236,233,217]],[9000,[252,251,242]]];
 function elevationColor(h){let i=1;while(i<stops.length-1&&h>stops[i][0])i++;const [a,ca]=stops[i-1],[b,cb]=stops[i],t=Math.max(0,Math.min(1,(h-a)/(b-a)));return ca.map((v,j)=>Math.round(v+(cb[j]-v)*t));}
-function makeMask(size,z,x,y,parts){
-  const canvas=makeCanvas(size);const ctx=canvas.getContext('2d'),n=2**z;
+function makeMask(size,z,x,y,parts,padding=0){
+  const canvas=makeCanvas(size+padding*2);const ctx=canvas.getContext('2d'),n=2**z;
+  ctx.translate(padding,padding);
   ctx.fillStyle='#fff';
   for(const part of parts){ctx.beginPath();for(const ring of part.coordinates){ring.forEach(([lon,lat],i)=>{const px=((lon+180)/360*n-x)*size,py=(mercatorY(lat)*n-y)*size;if(i===0)ctx.moveTo(px,py);else ctx.lineTo(px,py)});ctx.closePath()}ctx.fill('evenodd')}
   return canvas;
@@ -73,14 +75,20 @@ export async function processTerrainTile(params,controller,chinaOnly,color){
   bitmap.close();
   const query=new URLSearchParams(params.url.split('?')[1]||''),smooth=Math.max(0,Math.min(100,Number(query.get('smooth'))||0));
   const landMask=chinaOnly?makeMask(size,z,x,y,parts):null;
-  if(color||smooth){
+  if(color||smooth||chinaOnly){
     const image=rawctx.getImageData(0,0,size,size), pixels=image.data, original=new Float32Array(size*size);
-    for(let i=0;i<original.length;i++){const j=i*4;original[i]=pixels[j]*256+pixels[j+1]+pixels[j+2]/256-32768}
+    for(let i=0;i<original.length;i++){const j=i*4;original[i]=pixels[j+3]<128?0:pixels[j]*256+pixels[j+1]+pixels[j+2]/256-32768}
     let mask=null;
     if(landMask&&smooth){const alpha=landMask.getContext('2d',{willReadFrequently:true}).getImageData(0,0,size,size).data;mask=new Uint8Array(size*size);for(let i=0;i<mask.length;i++)mask[i]=alpha[i*4+3]>=128?1:0}
-    const heights=smoothTerrainHeights(original,size,size,smooth,mask);
+    let heights=smoothTerrainHeights(original,size,size,smooth,mask);
+    if(chinaOnly&&!color){
+      const padding=Math.max(4,Math.min(96,Math.round(2**z)));
+      const padded=makeMask(size,z,x,y,parts,padding),alpha=padded.getContext('2d',{willReadFrequently:true}).getImageData(0,0,size+padding*2,size+padding*2).data;
+      const paddedMask=new Uint8Array(alpha.length/4);for(let i=0;i<paddedMask.length;i++)paddedMask[i]=alpha[i*4+3]>=128?1:0;
+      heights=softenTerrainEdge(heights,paddedMask,size,padding);
+    }
     if(!color){
-      for(let i=0;i<heights.length;i++){const value=Math.max(0,Math.min(16777215,Math.round((heights[i]+32768)*256))),j=i*4;pixels[j]=value>>16;pixels[j+1]=(value>>8)&255;pixels[j+2]=value&255}
+      for(let i=0;i<heights.length;i++){const value=Math.max(0,Math.min(16777215,Math.round((heights[i]+32768)*256))),j=i*4;pixels[j]=value>>16;pixels[j+1]=(value>>8)&255;pixels[j+2]=value&255;pixels[j+3]=255}
     }else{
     const strength=Math.max(0,Math.min(1,Number(query.get('strength')||0)/100));
     const time=query.get('time')||'2026-06-21T12:00', gridSize=8, gridWidth=gridSize+1;
@@ -91,11 +99,12 @@ export async function processTerrainTile(params,controller,chinaOnly,color){
       solar[j]=vector[0];solar[j+1]=vector[1];solar[j+2]=vector[2];
     }
     const centerLat=tileLat(y+0.5,worldTiles), metersPerPixel=40075016.686*Math.cos(centerLat*Math.PI/180)/(size*worldTiles);
-    const slopeScale=28/(2*metersPerPixel), shadowSize=size/4;let shadows=new Float32Array(shadowSize*shadowSize);
+    const exaggeration=Math.max(1,Math.min(80,Number(query.get('height'))||80));
+    const slopeScale=exaggeration/(2*metersPerPixel), shadowSize=size/4;let shadows=new Float32Array(shadowSize*shadowSize);
     if(strength>0){
       for(let sy=0;sy<shadowSize;sy++)for(let sx=0;sx<shadowSize;sx++){
         const gx=Math.min(gridSize,Math.round((sx+0.5)*gridSize/shadowSize)),gy=Math.min(gridSize,Math.round((sy+0.5)*gridSize/shadowSize)),j=(gy*gridWidth+gx)*3;
-        shadows[sy*shadowSize+sx]=castShadowAt(heights,size,sx*4+2,sy*4+2,[solar[j],solar[j+1],solar[j+2]],metersPerPixel)?1:0;
+        shadows[sy*shadowSize+sx]=castShadowAt(heights,size,sx*4+2,sy*4+2,[solar[j],solar[j+1],solar[j+2]],metersPerPixel,exaggeration)?1:0;
       }
       shadows=softenShadowMask(shadows,shadowSize,shadowSize);
     }
@@ -120,6 +129,6 @@ export async function processTerrainTile(params,controller,chinaOnly,color){
     }
     rawctx.putImageData(image,0,0);
   }
-  if(chinaOnly){rawctx.globalCompositeOperation='destination-in';rawctx.drawImage(landMask,0,0)}
+  if(chinaOnly&&color){rawctx.globalCompositeOperation='destination-in';rawctx.drawImage(landMask,0,0)}
   ctx.drawImage(raw,0,0);return {data:await blobData(canvas)};
 }

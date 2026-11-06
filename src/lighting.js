@@ -34,14 +34,14 @@ export function softenShadowMask(mask,width,height){
   return result;
 }
 // A short, tile-local horizon test. It does not claim to be a global shadow simulation.
-export function castShadowAt(heights,size,x,y,vector,metersPerPixel) {
+export function castShadowAt(heights,size,x,y,vector,metersPerPixel,exaggeration=1) {
   const horizontal=Math.hypot(vector[0],vector[1]);
   if(vector[2]<=0||horizontal<1e-5)return false;
   const rise=vector[2]/horizontal*metersPerPixel,dx=vector[0]/horizontal,dy=-vector[1]/horizontal,origin=heights[y*size+x];
-  for(const distance of [2,4,8,12,16,24,32,48,64]){
+  for(const distance of [1,2,3,4,6,8,12,16,24,32,48,64,96]){
     const sx=Math.round(x+dx*distance),sy=Math.round(y+dy*distance);
     if(sx<0||sy<0||sx>=size||sy>=size)break;
-    if(heights[sy*size+sx]>origin+distance*rise+5)return true;
+    if((heights[sy*size+sx]-origin)*exaggeration>distance*rise+5)return true;
   }
   return false;
 }

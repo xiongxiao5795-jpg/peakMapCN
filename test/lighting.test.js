@@ -17,6 +17,12 @@ test('山体会遮挡其背向太阳的邻近地表',()=>{
   assert.equal(castShadowAt(heights,size,8,8,lightVector(270,20),100),false);
   assert.equal(castShadowAt(heights,size,8,8,lightVector(90,-5),100),false);
 });
+test('投影使用画面高度倍率并随太阳方向反转',()=>{
+  const size=24,heights=new Float32Array(size*size);heights[12*size+15]=20;
+  assert.equal(castShadowAt(heights,size,12,12,lightVector(90,35),100,1),false);
+  assert.equal(castShadowAt(heights,size,12,12,lightVector(90,35),100,80),true);
+  assert.equal(castShadowAt(heights,size,12,12,lightVector(270,35),100,80),false);
+});
 test('卫星图层的日夜和山体阴影可随强度调节',()=>{
   assert.equal(imageryShadowOpacity(1,1,false,1),0);
   assert.ok(imageryShadowOpacity(0,1,false,1)>0.59&&imageryShadowOpacity(0,1,false,1)<0.61);
