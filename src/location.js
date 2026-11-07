@@ -46,3 +46,17 @@ export function createProvinceLookup(features){
     return null;
   };
 }
+
+// Municipality boundaries also represent the city level. If detailed data is
+// unavailable, return the nearest known parent instead of a guessed boundary.
+export function selectLocationRegion(province,longitude,latitude,level,cityFeatures=[],districtFeatures=[]){
+  if(level==='province')return {feature:province,level:'province'};
+  const city=createProvinceLookup(cityFeatures)(longitude,latitude);
+  const municipality=['110000','120000','310000','500000'].includes(String(province.properties.adcode));
+  const parent=city||province;
+  if(level==='district'){
+    const district=createProvinceLookup(districtFeatures)(longitude,latitude);
+    if(district)return {feature:district,level:'district'};
+  }
+  return {feature:parent,level:city||municipality?'city':'province'};
+}

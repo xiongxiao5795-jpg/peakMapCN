@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {stableTerrainTileZoom,configureTerrainLod,configureMobileTerrainTextures,limitTerrainSkirts} from '../src/terrain-lod.js';
+import {stableTerrainTileZoom,uniformImageryZoom,configureTerrainLod,configureMobileTerrainTextures,limitTerrainSkirts} from '../src/terrain-lod.js';
 import {readFileSync} from 'node:fs';
 import {patchMapLibreTerrain} from '../build/patch-maplibre-terrain.js';
 
@@ -11,6 +11,17 @@ test('固定缩放下近处地形级别不随视角变化，远处逐步降低�
   assert.equal(stableTerrainTileZoom(7,8,0.1,1),4);
   const source={};configureTerrainLod({getSource:id=>id==='dem'?source:undefined});
   assert.equal(source.calculateTileZoom,stableTerrainTileZoom);
+});
+
+test('影像整个视野共用级别，并限制大视野瓦片数量',()=>{
+  const local=[[104.9,22.9],[108.3,24.9]],wide=[[95.6,22.3],[117.6,40.7]];
+  assert.equal(uniformImageryZoom(9,local,384),9);
+  const desktop=uniformImageryZoom(9,wide,384),mobile=uniformImageryZoom(9,wide,192);
+  assert.ok(desktop<9);assert.ok(mobile<=desktop);
+  const dem={tileSize:256},satellite={tileSize:256};
+  const map={getSource:id=>({dem,satellite})[id],getCenter:()=>({lng:106,lat:24}),getContainer:()=>({clientWidth:1000,clientHeight:700}),getPitch:()=>70,getBearing:()=>0,getBounds:()=>({toArray:()=>wide})};
+  configureTerrainLod(map);
+  assert.equal(satellite.calculateTileZoom(9,1,1,1),satellite.calculateTileZoom(9,100,1,1));
 });
 
 test('光影与设色使用地形的数据层级，不因纹理尺寸不同而多请求层级',()=>{

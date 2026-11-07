@@ -8,10 +8,33 @@ export function stableTerrainTileZoom(centerZoom,distanceToTile,distanceZ,distan
   return centerZoom-1-farDrop;
 }
 
+// Choose one satellite level for the entire view. Bound the projected tile
+// rectangle so a low-angle view cannot overwhelm mobile memory and networking.
+export function uniformImageryZoom(zoom,bounds,budget=192){
+  const [[west,south],[east,north]]=bounds;
+  const mercatorY=lat=>{const r=Math.max(-85.051129,Math.min(85.051129,lat))*Math.PI/180;return (1-Math.asinh(Math.tan(r))/Math.PI)/2};
+  const width=Math.min(1,Math.abs(east-west)/360),height=Math.abs(mercatorY(north)-mercatorY(south));
+  let level=Math.max(0,Math.min(19,Math.floor(zoom)));
+  while(level>0&&(Math.ceil(width*2**level)+1)*(Math.ceil(height*2**level)+1)>budget)level--;
+  return level;
+}
+
 export function configureTerrainLod(map){
   const source=map.getSource('dem');
   if(!source)return;
   source.calculateTileZoom=stableTerrainTileZoom;
+  const imagery=map.getSource('satellite');
+  if(imagery){
+    const budget=globalThis.matchMedia?.('(pointer: coarse)').matches?192:384;
+    let key='',level=0;
+    imagery.roundZoom=false;
+    imagery.calculateTileZoom=zoom=>{
+      const center=map.getCenter(),container=map.getContainer();
+      const next=[zoom,center.lng,center.lat,map.getPitch(),map.getBearing(),container.clientWidth,container.clientHeight].join(',');
+      if(next!==key){key=next;level=uniformImageryZoom(zoom,map.getBounds().toArray(),budget)}
+      return level;
+    };
+  }
   // The terrain manager uses twice the DEM source's visual tile size. Align
   // derived rasters with the same geographic DEM level instead of requesting
   // several times more tiles and mixing unrelated shading resolutions.
