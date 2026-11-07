@@ -65,3 +65,11 @@ body[data-layout=portrait] .detail-card{top:54px;max-height:min(33vh,230px)}
 .relief-control:not(:has(#relief-body[hidden])),body[data-layout=portrait] .relief-control:not(:has(#relief-body[hidden])){max-height:min(58vh,480px);overflow-y:auto;overscroll-behavior:contain}.relief-control #relief-body{padding-top:3px}.mode-heading{margin:2px 0 5px}.mode-setting{margin:5px 0}.mode-setting+.relief-head{padding-top:7px;margin-top:7px}.relief-presets{margin-top:7px}.detail-setting{margin-top:7px;padding-top:7px}.relief-control p{margin-top:5px;line-height:1.3}
 /* Search results must remain tappable above the floating toolbar. */
 .bottom-search:has(.search-results:not([hidden])){z-index:15}
+
+/* Keep the map button anchored while the settings open above it. */
+.relief-control,.relief-control:has(#relief-body[hidden]){display:flex;flex-direction:column-reverse;width:238px;padding:0;overflow:visible}
+.relief-control:not(:has(#relief-body[hidden])),body[data-layout=portrait] .relief-control:not(:has(#relief-body[hidden])){overflow:visible;max-height:none}
+.relief-control .relief-toggle{position:static;flex-shrink:0}
+.relief-control #relief-body{padding:12px 17px;overflow-y:auto;overscroll-behavior:contain;max-height:min(58vh,430px,calc(var(--visible-height) - var(--bar-height) - 110px))}
+body[data-layout=portrait] .relief-control #relief-body{max-height:min(52vh,380px,calc(var(--visible-height) - var(--bar-height) - 150px))}
+@media(max-width:650px){.relief-control,.relief-control:has(#relief-body[hidden]){width:174px}.relief-control #relief-body{padding:9px 12px;max-height:min(52vh,380px,calc(var(--visible-height) - var(--bar-height) - 110px))}}

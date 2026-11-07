@@ -1,4 +1,4 @@
-// Ignore isolated tile failures; switch only after several failures in a short window.
+// Ignore isolated tile failures; notify only after several failures in a short window.
 export function createImageryHealth(onUnavailable,{now=Date.now,threshold=3,windowMs=15000}={}){
   let failures=[];
   return {
