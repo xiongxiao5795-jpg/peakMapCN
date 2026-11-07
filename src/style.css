@@ -108,3 +108,10 @@ body[data-layout=portrait] .map-controls{left:12px;right:auto;top:auto;bottom:90
 .detail-more p{margin:6px 0;font-size:10px;line-height:1.4}
 .detail-card .detail-foot{margin-top:5px;padding-top:5px}
 @media(max-width:380px){.topbar,body[data-layout=landscape] .topbar,body[data-layout=portrait] .topbar{top:56px;left:12px}.detail-card,body[data-layout=portrait] .detail-card{top:100px}.relief-control,.relief-control:has(#relief-body[hidden]){width:155px}.relief-toggle{gap:5px;padding:8px;font-size:10px;white-space:nowrap}.relief-toggle strong{margin-left:3px}}
+
+/* A compact retry button; device and searched coordinates use distinct pins. */
+.locate-button{position:absolute;z-index:4;left:12px;bottom:112px;width:30px;height:30px;display:grid;place-items:center;padding:0;border:1px solid #81958166;border-radius:5px;background:#15241fe8;color:#d5e0d0;box-shadow:0 5px 20px #030b0a66;backdrop-filter:blur(12px)}
+.locate-button svg{width:16px;height:16px}
+.locate-button:disabled{opacity:.55;cursor:wait}
+.location-marker{width:16px;height:16px;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 5px #2987d650,0 1px 6px #000a;background:#2586d5;pointer-events:none}
+.location-marker.coordinate-marker{background:#efaa3d;box-shadow:0 0 0 5px #efa43d50,0 1px 6px #000a}
