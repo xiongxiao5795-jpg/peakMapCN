@@ -10,7 +10,19 @@ export function stableTerrainTileZoom(centerZoom,distanceToTile,distanceZ,distan
 
 export function configureTerrainLod(map){
   const source=map.getSource('dem');
-  if(source)source.calculateTileZoom=stableTerrainTileZoom;
+  if(!source)return;
+  source.calculateTileZoom=stableTerrainTileZoom;
+  // The terrain manager uses twice the DEM source's visual tile size. Align
+  // derived rasters with the same geographic DEM level instead of requesting
+  // several times more tiles and mixing unrelated shading resolutions.
+  for(const id of ['satellite-shade','relief']){
+    const derived=map.getSource(id);
+    if(!derived)continue;
+    derived.roundZoom=false;
+    derived.calculateTileZoom=(zoom,distance,vertical,center)=>stableTerrainTileZoom(
+      zoom+Math.log2(derived.tileSize/(source.tileSize*2)),distance,vertical,center
+    );
+  }
 }
 
 // MapLibre 6.16 offers only full-length or disabled skirts. Cap their length

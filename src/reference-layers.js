@@ -1,5 +1,6 @@
 import outsideChina from '../data/china-outside-mask.json';
 import { imageryTemplate, tileTemplate } from './terrain.js';
+import { bindShadeReadiness } from './shade-readiness.js';
 
 export const referenceGroups={
   roads:['road-major-casing','road-major','road-minor'],
@@ -16,7 +17,8 @@ export function addReferenceLayers(map,chinaOnly,lighting){
   map.addSource('satellite',{type:'raster',tiles:[imageryTemplate(chinaOnly)],tileSize:256,maxzoom:19});
   map.addLayer({id:'satellite',type:'raster',source:'satellite',paint:{'raster-fade-duration':150,'raster-saturation':0.08,'raster-contrast':0.03}},'admin-hit');
   map.addSource('satellite-shade',{type:'raster',tiles:[tileTemplate('shade',chinaOnly,lighting)],tileSize:256,maxzoom:12});
-  map.addLayer({id:'satellite-shade',type:'raster',source:'satellite-shade',paint:{'raster-fade-duration':150}},'admin-hit');
+  map.addLayer({id:'satellite-shade',type:'raster',source:'satellite-shade',paint:{'raster-fade-duration':150,'raster-opacity':0,'raster-opacity-transition':{duration:0}}},'admin-hit');
+  bindShadeReadiness(map);
   map.addSource('reference',{type:'vector',url:'https://tiles.openfreemap.org/planet',maxzoom:14});
   const before='admin-hit', common={type:'line',source:'reference','source-layer':'transportation',layout:{'line-join':'round','line-cap':'round'}};
   map.addLayer({id:'water-area',type:'fill',source:'reference','source-layer':'water',minzoom:5,paint:{'fill-color':'#609caf','fill-opacity':0.7}},before);

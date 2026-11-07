@@ -73,3 +73,38 @@ body[data-layout=portrait] .detail-card{top:54px;max-height:min(33vh,230px)}
 .relief-control #relief-body{padding:12px 17px;overflow-y:auto;overscroll-behavior:contain;max-height:min(58vh,430px,calc(var(--visible-height) - var(--bar-height) - 110px))}
 body[data-layout=portrait] .relief-control #relief-body{max-height:min(52vh,380px,calc(var(--visible-height) - var(--bar-height) - 150px))}
 @media(max-width:650px){.relief-control,.relief-control:has(#relief-body[hidden]){width:174px}.relief-control #relief-body{padding:9px 12px;max-height:min(52vh,380px,calc(var(--visible-height) - var(--bar-height) - 110px))}}
+
+/* Keep navigation at the lower left, above the status and attribution. */
+.map-controls{left:12px;right:auto;top:auto;bottom:80px;transform:none;z-index:4;max-height:calc(100% - 96px)}
+body[data-layout=portrait] .map-controls{left:12px;right:auto;top:auto;bottom:90px;transform:none;max-height:calc(100% - 105px)}
+
+/* Compact map controls and an on-demand search at the top-left corner. */
+.map-controls,body[data-layout=portrait] .map-controls{left:12px;right:auto;top:auto;bottom:70px;transform:none;display:flex;flex-direction:row;align-items:center;padding:2px;max-height:none;overflow:visible}
+.map-controls button{width:29px;height:30px;flex:none}
+.map-controls svg{width:15px;height:15px}
+.map-controls .control-separator{width:1px;height:20px;margin:0 2px;flex:none}
+.search-toggle{position:absolute;z-index:10;top:12px;left:12px;width:30px;height:29px;display:grid;place-items:center;padding:0;border:1px solid #81958166;border-radius:5px;background:#15241fe8;color:#e1ead8;box-shadow:0 5px 20px #030b0a66;backdrop-filter:blur(12px)}
+.search-toggle svg{width:14px;height:14px}
+.search-popover{position:absolute;z-index:12;top:54px;left:12px;width:min(320px,calc(100% - 24px))}
+.search-popover .search-wrap{height:42px;background:#162820;border-color:#657f69;box-shadow:0 7px 24px #0007}
+.search-popover input{font-size:13px}
+.search-popover .search-results{top:46px;bottom:auto;max-height:min(280px,45vh,calc(var(--visible-height) - 115px));overflow-y:auto}
+#search-close{display:grid;place-items:center;flex:none;width:28px;height:28px;padding:0;border:0;background:none;color:#b8cbb9}
+#search-close svg{width:15px;height:15px}
+.topbar,body[data-layout=landscape] .topbar,body[data-layout=portrait] .topbar{top:12px;left:56px;right:auto}
+.map-actions{gap:4px}
+.map-actions .layer-trigger{min-height:32px;gap:4px;padding:5px 7px;font-size:10px}
+.map-actions .layer-trigger>svg:last-child{display:none}
+.map-actions .layer-trigger svg{width:13px;height:13px}
+.map-actions .layer-trigger .sun-icon{font-size:16px}
+.detail-card,body[data-layout=portrait] .detail-card{top:60px;bottom:auto;left:12px;width:min(190px,calc(100% - 65px));max-height:min(34vh,220px);padding:8px 10px;overflow-y:auto}
+.detail-card .detail-close{top:7px;right:7px}
+.detail-card .detail-tag{font-size:9px}
+.detail-card h3{font-size:14px;margin:3px 22px 0 0}
+.detail-card>small{display:block;font-size:9px;margin-top:2px}
+.detail-card .elevation{margin-top:4px;font-size:10px}
+.detail-card .elevation b{font-size:14px}
+.detail-more{margin-top:4px;font-size:10px;color:#b9cdb9}
+.detail-more p{margin:6px 0;font-size:10px;line-height:1.4}
+.detail-card .detail-foot{margin-top:5px;padding-top:5px}
+@media(max-width:380px){.topbar,body[data-layout=landscape] .topbar,body[data-layout=portrait] .topbar{top:56px;left:12px}.detail-card,body[data-layout=portrait] .detail-card{top:100px}.relief-control,.relief-control:has(#relief-body[hidden]){width:155px}.relief-toggle{gap:5px;padding:8px;font-size:10px;white-space:nowrap}.relief-toggle strong{margin-left:3px}}

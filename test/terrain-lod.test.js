@@ -9,8 +9,20 @@ test('固定缩放下近处地形级别不随视角变化，远处逐步降低�
   assert.equal(near,6);
   assert.equal(stableTerrainTileZoom(7,1,0.1,1),near);
   assert.equal(stableTerrainTileZoom(7,8,0.1,1),4);
-  const source={};configureTerrainLod({getSource:()=>source});
+  const source={};configureTerrainLod({getSource:id=>id==='dem'?source:undefined});
   assert.equal(source.calculateTileZoom,stableTerrainTileZoom);
+});
+
+test('光影与设色使用地形的数据层级，不因纹理尺寸不同而多请求层级',()=>{
+  for(const demSize of [128,256,512]){
+    const dem={tileSize:demSize},shade={tileSize:256},relief={tileSize:demSize};
+    configureTerrainLod({getSource:id=>({dem,'satellite-shade':shade,relief})[id]});
+    const args=[1,0.5,1],terrainZoom=8+Math.log2(512/(2*demSize));
+    const expected=dem.calculateTileZoom(terrainZoom,...args);
+    assert.equal(shade.calculateTileZoom(8+Math.log2(512/shade.tileSize),...args),expected);
+    assert.equal(relief.calculateTileZoom(8+Math.log2(512/relief.tileSize),...args),expected);
+    assert.equal(shade.roundZoom,false);assert.equal(relief.roundZoom,false);
+  }
 });
 
 test('地形绘制与高程数据使用同一个层级规则，依赖升级时必须显式复核',()=>{
