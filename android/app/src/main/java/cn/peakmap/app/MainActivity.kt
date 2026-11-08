@@ -33,6 +33,7 @@ class MainActivity : Activity() {
             .build()
         webView = WebView(this).apply {
             settings.javaScriptEnabled = true
+            setOnLongClickListener { true }
             settings.domStorageEnabled = true
             settings.setGeolocationEnabled(true)
             settings.allowFileAccess = false

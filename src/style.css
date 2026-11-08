@@ -129,3 +129,28 @@ body[data-layout=portrait] .map-controls{left:12px;right:auto;top:auto;bottom:90
 .location-marker.device-marker{width:27px;height:36px;border:0;border-radius:0;box-shadow:none;background:transparent}
 .device-marker svg{display:block;width:100%;height:100%;filter:drop-shadow(0 2px 3px #000a)}
 .height-wheel-hint{display:block;margin-top:3px;color:#9db5a0;font-size:9px;font-weight:400;line-height:1.2;white-space:nowrap}
+.layer-panel .isolation-hint{margin:0 0 5px;color:#91a995;font-size:9px;line-height:1.35}
+.location-setting{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;color:#a2b4a2;font-size:11px}
+.location-setting button{padding:4px 7px;border:1px solid #617b62;border-radius:4px;background:#243a2e;color:#e3ebdf;font-size:10px}
+.location-setting button:disabled{opacity:.55}
+
+/* Keep the three left controls on one row, including narrow Android screens. */
+.topbar,body[data-layout=landscape] .topbar,body[data-layout=portrait] .topbar{top:12px;left:50px;right:auto}
+.top-right{gap:4px}
+.reset-panels{padding:6px;font-size:10px}
+.layout-select select{padding:6px;font-size:10px}
+.navigation-controls,.relief-control,body[data-layout=portrait] .relief-control,body[data-layout=landscape] .relief-control{bottom:var(--controls-bottom,56px)}
+@media(max-width:360px){
+  .navigation-controls{gap:4px}
+  .navigation-controls .map-controls button{width:25px}
+  .navigation-controls .map-controls .control-separator{margin:0 1px}
+  .relief-control,.relief-control:has(#relief-body[hidden]){width:145px}
+  .relief-toggle{gap:3px;padding:7px;font-size:9px}
+  .height-wheel-hint{font-size:8px}
+  .reset-panels,.layout-select select{font-size:9px;padding:6px 4px}
+}
+
+/* Stop accidental text callouts throughout the map; inputs remain typable. */
+html,body,input,textarea,[contenteditable=true]{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+.relief-control .relief-toggle{height:34px;padding:3px 8px;line-height:1.1}
+.height-wheel-hint{margin-top:1px;font-size:8px;line-height:1.1}

@@ -1,6 +1,6 @@
-import booleanIntersects from '@turf/boolean-intersects';
-import { polygon } from '@turf/helpers';
 import provinces from '../data/china-provinces.json';
+import {createTileCoverage} from './tile-coverage.js';
+import {createEmptyTileFactory} from './empty-tile.js';
 import { lightVector, lightFactor, solarBrightness, imageryShadowOpacity } from './lighting.js';
 import { sunlightAt } from './sun.js';
 import { loadTerrainBitmap, hasOverviewTile } from './terrain-data.js';
@@ -9,27 +9,11 @@ import { softenTerrainEdge } from './terrain-edge.js';
 
 // The final unnamed feature is a cartographic South China Sea inset, not land.
 export const adminAreas = {...provinces, features: provinces.features.filter(f => f.properties.name)};
-const polygons = adminAreas.features.flatMap(feature => {
-  const groups = feature.geometry.type === 'Polygon' ? [feature.geometry.coordinates] : feature.geometry.coordinates;
-  return groups.map(coordinates => {
-    const outer = coordinates[0];
-    const bounds = outer.reduce((b, [x,y]) => [Math.min(b[0],x),Math.min(b[1],y),Math.max(b[2],x),Math.max(b[3],y)], [180,90,-180,-90]);
-    return {coordinates, bounds, feature: polygon(coordinates)};
-  });
-});
-const overlaps = (a,b) => a[0]<=b[2] && a[2]>=b[0] && a[1]<=b[3] && a[3]>=b[1];
 const tileLat = (y,n) => Math.atan(Math.sinh(Math.PI*(1-2*y/n)))*180/Math.PI;
 const mercatorY = lat => (1-Math.asinh(Math.tan(Math.max(-85.05112878,Math.min(85.05112878,lat))*Math.PI/180))/Math.PI)/2;
-const coverageCache = new Map();
-function tilePolygons(z,x,y){
-  const key=`${z}/${x}/${y}`;
-  if(coverageCache.has(key))return coverageCache.get(key);
-  const n=2**z, bounds=[x/n*360-180,tileLat(y+1,n),(x+1)/n*360-180,tileLat(y,n)];
-  const [w,s,e,north]=bounds; const tile=polygon([[[w,s],[e,s],[e,north],[w,north],[w,s]]]);
-  const found=polygons.filter(p=>overlaps(bounds,p.bounds)&&booleanIntersects(p.feature,tile));
-  if(coverageCache.size>512)coverageCache.clear();
-  coverageCache.set(key,found);return found;
-}
+const tilePolygons=createTileCoverage(adminAreas.features);
+const regionCoverages=new WeakMap();
+function coverageFor(region){if(!region)return null;if(!regionCoverages.has(region))regionCoverages.set(region,createTileCoverage([region]));return regionCoverages.get(region)}
 export const intersectsChinaTile = (z,x,y) => tilePolygons(z,x,y).length > 0;
 const stops = [[-12000,[5,14,19]],[-1,[5,14,19]],[0,[9,22,23]],[1,[40,75,44]],[200,[55,92,49]],[700,[94,112,64]],[1500,[139,137,79]],[2500,[171,153,97]],[3500,[184,159,112]],[4500,[167,151,118]],[5500,[199,191,166]],[7000,[236,233,217]],[9000,[252,251,242]]];
 function elevationColor(h){let i=1;while(i<stops.length-1&&h>stops[i][0])i++;const [a,ca]=stops[i-1],[b,cb]=stops[i],t=Math.max(0,Math.min(1,(h-a)/(b-a)));return ca.map((v,j)=>Math.round(v+(cb[j]-v)*t));}
@@ -42,11 +26,12 @@ function makeMask(size,z,x,y,parts,padding=0){
 }
 const makeCanvas=(size)=>{const canvas=typeof OffscreenCanvas==='function'?new OffscreenCanvas(size,size):document.createElement('canvas');canvas.width=canvas.height=size;return canvas};
 const blobData=canvas=>('convertToBlob' in canvas?canvas.convertToBlob({type:'image/png'}):new Promise(resolve=>canvas.toBlob(resolve,'image/png'))).then(blob=>blob.arrayBuffer());
+const emptyTile=createEmptyTileFactory(makeCanvas,blobData);
 
 // Shading needs values on both sides of a tile boundary. Build a narrow halo
 // from the same-level neighbours before smoothing and computing gradients.
 // If a neighbour cannot be loaded, extend the closest available edge instead.
-async function paddedShadeHeights(raw,size,z,x,y,chinaOnly,controller,smooth){
+async function paddedShadeHeights(raw,size,z,x,y,chinaOnly,controller,smooth,coverage){
   if(controller.signal.aborted)throw new DOMException('Aborted','AbortError');
   const pad=Math.ceil(size*24/256),width=size+2*pad,canvas=makeCanvas(width),ctx=canvas.getContext('2d',{willReadFrequently:true});
   ctx.imageSmoothingEnabled=false;
@@ -61,7 +46,7 @@ async function paddedShadeHeights(raw,size,z,x,y,chinaOnly,controller,smooth){
   for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
     if(!dx&&!dy)continue;
     const nx=(x+dx+n)%n,ny=y+dy;
-    if(ny<0||ny>=n||(chinaOnly&&(!hasOverviewTile(z,nx,ny)||(z>6&&!intersectsChinaTile(z,nx,ny)))))continue;
+    if(ny<0||ny>=n||(coverage&&!coverage(z,nx,ny).length)||(chinaOnly&&(!hasOverviewTile(z,nx,ny)||(z>6&&!intersectsChinaTile(z,nx,ny)))))continue;
     jobs.push((async()=>{
       try{
         const {bitmap,tile}=await loadTerrainBitmap(z,nx,ny,chinaOnly,neighbors.signal);
@@ -79,11 +64,11 @@ async function paddedShadeHeights(raw,size,z,x,y,chinaOnly,controller,smooth){
   return {heights:smoothTerrainHeights(heights,width,width,smooth,mask),width,pad};
 }
 
-export async function processImageryTile(params,controller,chinaOnly){
+export async function processImageryTile(params,controller,chinaOnly,region=null){
   const match=params.url.match(/\/(\d+)\/(\d+)\/(\d+)\.jpg/);if(!match)throw new Error('Invalid imagery tile URL');
-  const [,zs,xs,ys]=match,z=+zs,x=+xs,y=+ys,parts=chinaOnly?tilePolygons(z,x,y):null;
+  const [,zs,xs,ys]=match,z=+zs,x=+xs,y=+ys,coverage=coverageFor(region)||(chinaOnly?tilePolygons:null),parts=coverage?coverage(z,x,y):null;
+  if(coverage&&!parts.length)return emptyTile(256);
   const canvas=makeCanvas(256),ctx=canvas.getContext('2d');
-  if(chinaOnly&&!parts.length)return {data:await blobData(canvas),outside:true};
   for(let attempt=0;attempt<3;attempt++){
     const request=new AbortController(),abort=()=>request.abort(),timer=setTimeout(abort,12000);
     controller.signal.addEventListener('abort',abort,{once:true});
@@ -96,34 +81,36 @@ export async function processImageryTile(params,controller,chinaOnly){
       if(controller.signal.aborted||attempt===2)throw error;
     }finally{clearTimeout(timer);controller.signal.removeEventListener('abort',abort)}
   }
-  if(chinaOnly){ctx.globalCompositeOperation='destination-in';ctx.drawImage(makeMask(256,z,x,y,parts),0,0)}
+  if(coverage){ctx.globalCompositeOperation='destination-in';ctx.drawImage(makeMask(256,z,x,y,parts),0,0)}
   return {data:await blobData(canvas)};
 }
-export async function processTerrainTile(params,controller,chinaOnly,color){
+export async function processTerrainTile(params,controller,chinaOnly,color,region=null){
   const match=params.url.match(/\/(\d+)\/(\d+)\/(\d+)\.webp/);if(!match)throw new Error('Invalid terrain tile URL');
-  const [,zs,xs,ys]=match, z=+zs,x=+xs,y=+ys, parts=chinaOnly?tilePolygons(z,x,y):null;
+  const [,zs,xs,ys]=match, z=+zs,x=+xs,y=+ys, coverage=coverageFor(region)||(chinaOnly?tilePolygons:null),parts=coverage?coverage(z,x,y):null;
   // A 128-pixel translucent shade mask is filtered over satellite imagery;
   // this keeps overlap processing affordable on mobile devices.
-  const size=color==='shade'?128:512,canvas=makeCanvas(size);const ctx=canvas.getContext('2d',{willReadFrequently:true});
-  if(!color){ctx.fillStyle='rgb(128,0,0)';ctx.fillRect(0,0,size,size)}
+  const size=color==='shade'?128:512;
   // Never request a remote elevation tile that does not intersect a land polygon.
-  if(chinaOnly&&!parts.length)return {data:await blobData(canvas)};
-  const {bitmap,tile}=await loadTerrainBitmap(z,x,y,chinaOnly,controller.signal),raw=makeCanvas(size);const rawctx=raw.getContext('2d',{willReadFrequently:true});
+  if(coverage&&!parts.length)return emptyTile(size,!color);
+  const canvas=makeCanvas(size),ctx=canvas.getContext('2d',{willReadFrequently:true});
+  if(!color){ctx.fillStyle='rgb(128,0,0)';ctx.fillRect(0,0,size,size)}
+  const overview=chinaOnly||!!region;
+  const {bitmap,tile}=await loadTerrainBitmap(z,x,y,overview,controller.signal),raw=makeCanvas(size);const rawctx=raw.getContext('2d',{willReadFrequently:true});
   // Interpolating encoded RGB channels produces false heights at byte boundaries.
   rawctx.imageSmoothingEnabled=false;
   if(tile&&tile.scale>1){const crop=512/tile.scale;rawctx.drawImage(bitmap,tile.dx*crop,tile.dy*crop,crop,crop,0,0,size,size)}
   else rawctx.drawImage(bitmap,0,0,size,size);
   bitmap.close();
   const query=new URLSearchParams(params.url.split('?')[1]||''),smooth=Math.max(0,Math.min(100,Number(query.get('smooth'))||0));
-  const landMask=chinaOnly?makeMask(size,z,x,y,parts):null;
-  if(color||smooth||chinaOnly){
+  const landMask=coverage?makeMask(size,z,x,y,parts):null;
+  if(color||smooth||coverage){
     const image=rawctx.getImageData(0,0,size,size), pixels=image.data, original=new Float32Array(size*size);
     for(let i=0;i<original.length;i++){const j=i*4;original[i]=pixels[j+3]<128?0:pixels[j]*256+pixels[j+1]+pixels[j+2]/256-32768}
     let mask=null;
     if(landMask&&smooth){const alpha=landMask.getContext('2d',{willReadFrequently:true}).getImageData(0,0,size,size).data;mask=new Uint8Array(size*size);for(let i=0;i<mask.length;i++)mask[i]=alpha[i*4+3]>=128?1:0}
     let heights=smoothTerrainHeights(original,size,size,smooth,mask);
-    const shadeData=color==='shade'?await paddedShadeHeights(raw,size,z,x,y,chinaOnly,controller,smooth):null;
-    if(chinaOnly&&!color){
+    const shadeData=color==='shade'?await paddedShadeHeights(raw,size,z,x,y,overview,controller,smooth,coverageFor(region)):null;
+    if(coverage&&!color){
       const padding=Math.max(4,Math.min(96,Math.round(2**z)));
       const padded=makeMask(size,z,x,y,parts,padding),alpha=padded.getContext('2d',{willReadFrequently:true}).getImageData(0,0,size+padding*2,size+padding*2).data;
       const paddedMask=new Uint8Array(alpha.length/4);for(let i=0;i<paddedMask.length;i++)paddedMask[i]=alpha[i*4+3]>=128?1:0;
@@ -166,6 +153,6 @@ export async function processTerrainTile(params,controller,chinaOnly,color){
     }
     rawctx.putImageData(image,0,0);
   }
-  if(chinaOnly&&color){rawctx.globalCompositeOperation='destination-in';rawctx.drawImage(landMask,0,0)}
+  if(coverage&&color){rawctx.globalCompositeOperation='destination-in';rawctx.drawImage(landMask,0,0)}
   ctx.drawImage(raw,0,0);return {data:await blobData(canvas)};
 }

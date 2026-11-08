@@ -5,7 +5,7 @@ import { loadLocalAdministrativeBoundaries, loadLocalDistrictBoundaries } from '
 export function createAdministrativeLayers(map,provinces,entries,onRecordsChanged){
   const entryByCode=new Map(entries.map(p=>[p.adcode,p])),featuresByCode=new Map();
   const cityGroups=new Map(),districtGroups=new Map(),boundsCache=new WeakMap();
-  let revision=0,timer,citySignature='',districtSignature='';
+  let revision=0,timer,citySignature='',districtSignature='',scope=null;
   const boundsOf=feature=>{if(!boundsCache.has(feature))boundsCache.set(feature,geometryBounds(feature));return boundsCache.get(feature)};
   const viewport=()=>{const b=map.getBounds();return [b.getWest(),b.getSouth(),b.getEast(),b.getNorth()]};
   function remember(feature){
@@ -53,7 +53,8 @@ export function createAdministrativeLayers(map,provinces,entries,onRecordsChange
   async function refresh(){
     const current=++revision,zoom=map.getZoom(),area=viewport();
     if(zoom<6){apply('admin-cities',[],'','city');apply('admin-districts',[],'','district');return}
-    const parents=selectVisible(provinces.features,area,8);
+    const provinceCode=scope?`${String(scope.properties.adcode).slice(0,2)}0000`:null;
+    const parents=selectVisible(provinceCode?provinces.features.filter(f=>String(f.properties.adcode)===provinceCode):provinces.features,area,8);
     const groups=await Promise.allSettled(parents.map(f=>loadGroup(cityGroups,String(f.properties.adcode))));
     if(current!==revision)return;
     const all=groups.flatMap(x=>x.status==='fulfilled'?x.value:[]);
@@ -62,7 +63,9 @@ export function createAdministrativeLayers(map,provinces,entries,onRecordsChange
     const loadedParents=parents.filter((_,i)=>groups[i].status==='fulfilled').map(f=>f.properties.adcode).join(',');
     apply('admin-cities',cityFeatures,loadedParents,'city');
     if(zoom<8.5){apply('admin-districts',[],'','district');return}
-    const cityParents=selectVisible(cityFeatures,area,12);
+    const scopeCode=scope?String(scope.properties.adcode):null;
+    const cityCode=scopeCode&&scopeCode.slice(2)!=='0000'?`${scopeCode.slice(0,4)}00`:null;
+    const cityParents=selectVisible(cityCode?cityFeatures.filter(f=>String(f.properties.adcode)===cityCode):cityFeatures,area,12);
     const [childGroups,provinceGroups]=await Promise.all([
       Promise.allSettled(cityParents.map(f=>loadGroup(districtGroups,String(f.properties.adcode)))),
       Promise.all(parents.map(async f=>{
@@ -78,5 +81,5 @@ export function createAdministrativeLayers(map,provinces,entries,onRecordsChange
     apply('admin-districts',districtFeatures,loadedParents+'|'+loadedCities,'district');
   }
   function schedule(){revision++;clearTimeout(timer);timer=setTimeout(()=>void refresh(),200)}
-  return {schedule,loadOne,recordForFeature:feature=>entryByCode.get(String(feature.properties.adcode))};
+  return {schedule,loadOne,setScope(feature){scope=feature;schedule()},recordForFeature:feature=>entryByCode.get(String(feature.properties.adcode))};
 }
