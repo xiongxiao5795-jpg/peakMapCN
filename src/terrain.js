@@ -1,5 +1,8 @@
 import { adminAreas, intersectsChinaTile, processTerrainTile, processImageryTile } from './terrain-processing.js';
 export { adminAreas, intersectsChinaTile };
+let terrainSource='mapterhorn';
+export function setTerrainSource(source){terrainSource=source==='aws'?'aws':'mapterhorn'}
+export function getTerrainSource(){return terrainSource}
 let regionRevision=0;
 const regions=new Map([[0,null]]);
 export function setTerrainRegion(feature){
@@ -53,7 +56,7 @@ function makeWorkerPool(workerCount=2) {
 }
 export function registerTerrainProtocols(maplibre,{onImagerySuccess=()=>{},onImageryFailure=()=>{}}={}){
   const workerRequest=makeWorkerPool(),imageryRequest=makeWorkerPool(3);
-  for(const [scheme,chinaOnly,color,kind] of [['dem-china',true,false,'terrain'],['dem-world',false,false,'terrain'],['relief-china',true,true,'terrain'],['relief-world',false,true,'terrain'],['shade-china',true,true,'shade'],['shade-world',false,true,'shade'],['imagery-china',true,false,'imagery'],['imagery-world',false,false,'imagery']]){
+  for(const [scheme,chinaOnly,color,kind] of [['dem-china',true,false,'terrain'],['dem-world',false,false,'terrain'],['relief-china',true,true,'terrain'],['relief-world',false,true,'terrain'],['shade-china',true,true,'shade'],['shade-world',false,true,'shade'],['multi-china',true,'multi','terrain'],['multi-world',false,'multi','terrain'],['slope-china',true,'slope','terrain'],['slope-world',false,'slope','terrain'],['aspect-china',true,'aspect','terrain'],['aspect-world',false,'aspect','terrain'],['imagery-china',true,false,'imagery'],['imagery-world',false,false,'imagery']]){
     maplibre.addProtocol(scheme,async(params,controller)=>{
       try{
         const region=regionForUrl(params.url);
@@ -70,5 +73,5 @@ export function registerTerrainProtocols(maplibre,{onImagerySuccess=()=>{},onIma
     });
   }
 }
-export const tileTemplate=(type,chinaOnly,lighting='')=>`${type}-${chinaOnly?'china':'world'}://tiles.mapterhorn.com/{z}/{x}/{y}.webp?${regionQuery()}${lighting?'&'+lighting:''}`;
+export const tileTemplate=(type,chinaOnly,lighting='',source=terrainSource)=>`${type}-${chinaOnly?'china':'world'}://tiles.mapterhorn.com/{z}/{x}/{y}.webp?${regionQuery()}&source=${source==='aws'?'aws':'mapterhorn'}${lighting?'&'+lighting:''}`;
 export const imageryTemplate=chinaOnly=>`imagery-${chinaOnly?'china':'world'}://imagery/{z}/{x}/{y}.jpg?${regionQuery()}`;

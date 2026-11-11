@@ -8,13 +8,15 @@
     "dev:https": "node scripts/dev-https.mjs",
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173 --strictPort",
-    "test": "node --test"
+    "test": "node --test",
+    "dev:lan": "vite --host 0.0.0.0 --port 53257 --strictPort"
   },
   "dependencies": {
     "@turf/boolean-intersects": "^7.4.0",
     "@turf/boolean-point-in-polygon": "^7.4.0",
     "@turf/helpers": "^7.4.0",
     "lucide": "^1.68.0",
+    "maplibre-contour": "^0.1.1",
     "maplibre-gl": "6.16.0",
     "suncalc": "^2.1.1",
     "vite": "^8.3.5"

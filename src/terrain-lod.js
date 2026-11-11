@@ -2,7 +2,8 @@
 // rotates. Use one coarser level than the nominal center zoom to control tile
 // count, and progressively coarsen terrain farther from the camera.
 // MapLibre still chooses and loads visible tiles and falls back to parents.
-export function stableTerrainTileZoom(centerZoom,distanceToTile,distanceZ,distanceToCenter){
+export function stableTerrainTileZoom(centerZoom,distanceToTile,distanceZ,distanceToCenter,uniform=false){
+  if(uniform)return centerZoom-1;
   const reference=Math.max(Number.EPSILON,distanceToCenter*2);
   const farDrop=Math.max(0,Math.log2(Math.max(1,distanceToTile/reference)));
   return centerZoom-1-farDrop;
@@ -22,7 +23,11 @@ export function uniformImageryZoom(zoom,bounds,budget=192){
 export function configureTerrainLod(map){
   const source=map.getSource('dem');
   if(!source)return;
-  source.calculateTileZoom=stableTerrainTileZoom;
+  // Retain the stable near/far rule while asking for more detail than the
+  // previous full-level reduction. Touch devices use a smaller increase.
+  const coarse=globalThis.matchMedia?.('(pointer: coarse)').matches===true;
+  const bias=coarse?0.35:0.7;
+  source.calculateTileZoom=(zoom,distance,vertical,center)=>stableTerrainTileZoom(zoom,distance,vertical,center,!!map.__peakmapRegionIsolated)+bias;
   const imagery=map.getSource('satellite');
   if(imagery){
     const budget=globalThis.matchMedia?.('(pointer: coarse)').matches?192:384;
@@ -42,10 +47,20 @@ export function configureTerrainLod(map){
     const derived=map.getSource(id);
     if(!derived)continue;
     derived.roundZoom=false;
-    derived.calculateTileZoom=(zoom,distance,vertical,center)=>stableTerrainTileZoom(
+    derived.calculateTileZoom=(zoom,distance,vertical,center)=>source.calculateTileZoom(
       zoom+Math.log2(derived.tileSize/(source.tileSize*2)),distance,vertical,center
     );
   }
+}
+
+// MapLibre defaults to 128 subdivisions per tile. A denser mesh makes the
+// DEM's actual ridges less faceted; it cannot invent missing DEM resolution.
+// Both values stay below the 16-bit mesh-index limit, including skirts.
+export function configureTerrainMesh(map,coarsePointer=globalThis.matchMedia?.('(pointer: coarse)').matches===true){
+  const terrain=map.terrain;if(!terrain||typeof terrain.meshSize!=='number')return;
+  const size=coarsePointer?160:192;if(terrain.meshSize===size)return;
+  for(const mesh of Object.values(terrain._meshCache||{}))mesh.destroy();
+  terrain._meshCache={};terrain.meshSize=size;terrain.tileManager?.releaseAllRTT?.();map.triggerRepaint?.();
 }
 
 // MapLibre 6.16 offers only full-length or disabled skirts. Cap their length

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {stableTerrainTileZoom,uniformImageryZoom,configureTerrainLod,configureMobileTerrainTextures,limitTerrainSkirts} from '../src/terrain-lod.js';
+import {stableTerrainTileZoom,uniformImageryZoom,configureTerrainLod,configureMobileTerrainTextures,limitTerrainSkirts,configureTerrainMesh} from '../src/terrain-lod.js';
 import {readFileSync} from 'node:fs';
 import {patchMapLibreTerrain} from '../build/patch-maplibre-terrain.js';
 
@@ -10,7 +10,16 @@ test('固定缩放下近处地形级别不随视角变化，远处逐步降低�
   assert.equal(stableTerrainTileZoom(7,1,0.1,1),near);
   assert.equal(stableTerrainTileZoom(7,8,0.1,1),4);
   const source={};configureTerrainLod({getSource:id=>id==='dem'?source:undefined});
-  assert.equal(source.calculateTileZoom,stableTerrainTileZoom);
+  assert.equal(source.calculateTileZoom(7,1,0.5,1),near+0.7);
+});
+
+test('隔离行政区时近处与远处使用相同细节层级，恢复全图后重新分级',()=>{
+  const source={},map={getSource:id=>id==='dem'?source:undefined};configureTerrainLod(map);
+  assert.notEqual(source.calculateTileZoom(9,1,1,1),source.calculateTileZoom(9,8,1,1));
+  map.__peakmapRegionIsolated=true;
+  assert.equal(source.calculateTileZoom(9,1,1,1),source.calculateTileZoom(9,8,1,1));
+  map.__peakmapRegionIsolated=false;
+  assert.notEqual(source.calculateTileZoom(9,1,1,1),source.calculateTileZoom(9,8,1,1));
 });
 
 test('影像整个视野共用级别，并限制大视野瓦片数量',()=>{
@@ -58,4 +67,11 @@ test('接缝遮挡有高度上限，地形重建后仍可重新配置',()=>{
   limitTerrainSkirts(map);assert.equal(map.terrain.getSkirtLength(5),40000);
   map.terrain={exaggeration:1,getSkirtLength:()=>10000};limitTerrainSkirts(map);
   assert.equal(map.terrain.getSkirtLength(5),2000);
+});
+
+
+test('地形网格加密后清理旧网格，触屏设备采用较低密度',()=>{
+  let destroyed=0,repaints=0;const map={terrain:{meshSize:128,_meshCache:{old:{destroy(){destroyed++}}},tileManager:{releaseAllRTT(){}}},triggerRepaint(){repaints++}};
+  configureTerrainMesh(map,false);assert.equal(map.terrain.meshSize,192);assert.equal(destroyed,1);assert.equal(repaints,1);
+  configureTerrainMesh(map,false);assert.equal(repaints,1);configureTerrainMesh(map,true);assert.equal(map.terrain.meshSize,160);
 });

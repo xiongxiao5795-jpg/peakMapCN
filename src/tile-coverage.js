@@ -26,6 +26,16 @@ export function createTileCoverage(features){
     if(cache.size>=512)cache.clear();cache.set(key,found);return found;
   };
   coverage.mayIntersect=(z,x,y)=>{const bounds=tileBounds(z,x,y);return parts.some(part=>overlaps(bounds,part.bounds))};
+  // Include polygon components just outside the tile when building padded
+  // masks. Otherwise adjacent tiles can disagree about the very same edge.
+  coverage.withNeighbors=(z,x,y,radius=1)=>{
+    const n=2**z,found=new Set();
+    for(let dy=-radius;dy<=radius;dy++)for(let dx=-radius;dx<=radius;dx++){
+      const ny=y+dy;if(ny<0||ny>=n)continue;
+      for(const part of coverage(z,(x+dx+n)%n,ny))found.add(part);
+    }
+    return [...found];
+  };
   return coverage;
 }
 

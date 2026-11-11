@@ -4,6 +4,8 @@ import {createEmptyTileFactory} from './empty-tile.js';
 import { lightVector, lightFactor, solarBrightness, imageryShadowOpacity } from './lighting.js';
 import { sunlightAt } from './sun.js';
 import { loadTerrainBitmap, hasOverviewTile } from './terrain-data.js';
+import { terrainMetrics } from './terrain-metrics.js';
+import { buildShadowGrid, sampleShadowGrid } from './terrain-shadows.js';
 import { smoothTerrainHeights } from './terrain-smoothing.js';
 import { softenTerrainEdge } from './terrain-edge.js';
 
@@ -31,9 +33,10 @@ const emptyTile=createEmptyTileFactory(makeCanvas,blobData);
 // Shading needs values on both sides of a tile boundary. Build a narrow halo
 // from the same-level neighbours before smoothing and computing gradients.
 // If a neighbour cannot be loaded, extend the closest available edge instead.
-async function paddedShadeHeights(raw,size,z,x,y,chinaOnly,controller,smooth,coverage){
+async function paddedShadeHeights(raw,size,z,x,y,chinaOnly,controller,smooth,coverage,castShadow=false,source='mapterhorn'){
   if(controller.signal.aborted)throw new DOMException('Aborted','AbortError');
-  const pad=Math.ceil(size*24/256),width=size+2*pad,canvas=makeCanvas(width),ctx=canvas.getContext('2d',{willReadFrequently:true});
+  const pad=Math.ceil(size*(castShadow?68:24)/256),width=size+2*pad,canvas=makeCanvas(width),ctx=canvas.getContext('2d',{willReadFrequently:true});
+  const available=makeCanvas(width),availableCtx=available.getContext('2d',{willReadFrequently:true});availableCtx.fillStyle='#fff';availableCtx.fillRect(pad,pad,size,size);
   ctx.imageSmoothingEnabled=false;
   ctx.drawImage(raw,0,0,1,size,0,pad,pad,size);ctx.drawImage(raw,size-1,0,1,size,pad+size,pad,pad,size);
   ctx.drawImage(raw,0,0,size,1,pad,0,size,pad);ctx.drawImage(raw,0,size-1,size,1,pad,pad+size,size,pad);
@@ -49,19 +52,20 @@ async function paddedShadeHeights(raw,size,z,x,y,chinaOnly,controller,smooth,cov
     if(ny<0||ny>=n||(coverage&&!coverage(z,nx,ny).length)||(chinaOnly&&(!hasOverviewTile(z,nx,ny)||(z>6&&!intersectsChinaTile(z,nx,ny)))))continue;
     jobs.push((async()=>{
       try{
-        const {bitmap,tile}=await loadTerrainBitmap(z,nx,ny,chinaOnly,neighbors.signal);
+        const {bitmap,tile}=await loadTerrainBitmap(z,nx,ny,chinaOnly,neighbors.signal,source);
         try{
-          const crop=tile?512/tile.scale:512,sx=tile?tile.dx*crop:0,sy=tile?tile.dy*crop:0;
+          const crop=tile?bitmap.width/tile.scale:bitmap.width,sx=tile?tile.dx*crop:0,sy=tile?tile.dy*crop:0;
           ctx.drawImage(bitmap,sx,sy,crop,crop,pad+dx*size,pad+dy*size,size,size);
+          availableCtx.fillRect(pad+dx*size,pad+dy*size,size,size);
         }finally{bitmap.close()}
       }catch(error){if(controller.signal.aborted)throw error}
     })());
   }
   try{await Promise.all(jobs)}finally{clearTimeout(neighborTimer);controller.signal.removeEventListener('abort',abortNeighbors)}
   if(controller.signal.aborted)throw new DOMException('Aborted','AbortError');
-  const pixels=ctx.getImageData(0,0,width,width).data,heights=new Float32Array(width*width),mask=chinaOnly?new Uint8Array(width*width):null;
-  for(let i=0;i<heights.length;i++){const j=i*4,valid=pixels[j+3]>=128;heights[i]=valid?pixels[j]*256+pixels[j+1]+pixels[j+2]/256-32768:0;if(mask)mask[i]=valid?1:0}
-  return {heights:smoothTerrainHeights(heights,width,width,smooth,mask),width,pad};
+  const pixels=ctx.getImageData(0,0,width,width).data,availability=availableCtx.getImageData(0,0,width,width).data,heights=new Float32Array(width*width),mask=chinaOnly?new Uint8Array(width*width):null,valid=new Uint8Array(width*width);
+  for(let i=0;i<heights.length;i++){const j=i*4,isValid=pixels[j+3]>=128;heights[i]=isValid?pixels[j]*256+pixels[j+1]+pixels[j+2]/256-32768:0;if(mask)mask[i]=isValid?1:0;valid[i]=isValid&&availability[j+3]>=128?1:0}
+  return {heights:smoothTerrainHeights(heights,width,width,smooth,mask),valid,width,pad};
 }
 
 export async function processImageryTile(params,controller,chinaOnly,region=null){
@@ -94,25 +98,30 @@ export async function processTerrainTile(params,controller,chinaOnly,color,regio
   if(coverage&&!parts.length)return emptyTile(size,!color);
   const canvas=makeCanvas(size),ctx=canvas.getContext('2d',{willReadFrequently:true});
   if(!color){ctx.fillStyle='rgb(128,0,0)';ctx.fillRect(0,0,size,size)}
-  const overview=chinaOnly||!!region;
-  const {bitmap,tile}=await loadTerrainBitmap(z,x,y,overview,controller.signal),raw=makeCanvas(size);const rawctx=raw.getContext('2d',{willReadFrequently:true});
+  const overview=chinaOnly||!!region,query=new URLSearchParams(params.url.split('?')[1]||''),source=query.get('source')==='aws'?'aws':'mapterhorn';
+  const {bitmap,tile}=await loadTerrainBitmap(z,x,y,overview,controller.signal,source),raw=makeCanvas(size);const rawctx=raw.getContext('2d',{willReadFrequently:true});
   // Interpolating encoded RGB channels produces false heights at byte boundaries.
   rawctx.imageSmoothingEnabled=false;
-  if(tile&&tile.scale>1){const crop=512/tile.scale;rawctx.drawImage(bitmap,tile.dx*crop,tile.dy*crop,crop,crop,0,0,size,size)}
+  if(tile&&tile.scale>1){const crop=bitmap.width/tile.scale;rawctx.drawImage(bitmap,tile.dx*crop,tile.dy*crop,crop,crop,0,0,size,size)}
   else rawctx.drawImage(bitmap,0,0,size,size);
   bitmap.close();
-  const query=new URLSearchParams(params.url.split('?')[1]||''),smooth=Math.max(0,Math.min(100,Number(query.get('smooth'))||0));
+  const smooth=Math.max(0,Math.min(100,Number(query.get('smooth'))||0));
   const landMask=coverage?makeMask(size,z,x,y,parts):null;
   if(color||smooth||coverage){
     const image=rawctx.getImageData(0,0,size,size), pixels=image.data, original=new Float32Array(size*size);
     for(let i=0;i<original.length;i++){const j=i*4;original[i]=pixels[j+3]<128?0:pixels[j]*256+pixels[j+1]+pixels[j+2]/256-32768}
     let mask=null;
-    if(landMask&&smooth){const alpha=landMask.getContext('2d',{willReadFrequently:true}).getImageData(0,0,size,size).data;mask=new Uint8Array(size*size);for(let i=0;i<mask.length;i++)mask[i]=alpha[i*4+3]>=128?1:0}
+    if(smooth&&(landMask||color)){
+      // A display boundary is not a break in the underlying elevation data.
+      const alpha=color?pixels:landMask.getContext('2d',{willReadFrequently:true}).getImageData(0,0,size,size).data;
+      mask=new Uint8Array(size*size);for(let i=0;i<mask.length;i++)mask[i]=alpha[i*4+3]>=128?1:0;
+    }
     let heights=smoothTerrainHeights(original,size,size,smooth,mask);
-    const shadeData=color==='shade'?await paddedShadeHeights(raw,size,z,x,y,overview,controller,smooth,coverageFor(region)):null;
+    const analysis=color==='slope'||color==='aspect'||color==='multi',castShadow=!analysis&&!!color&&query.get('shadow')!=='0';
+    const shadeData=(color==='shade'||analysis||castShadow)?await paddedShadeHeights(raw,size,z,x,y,overview,controller,analysis?0:smooth,null,castShadow,source):null;
     if(coverage&&!color){
       const padding=Math.max(4,Math.min(96,Math.round(2**z)));
-      const padded=makeMask(size,z,x,y,parts,padding),alpha=padded.getContext('2d',{willReadFrequently:true}).getImageData(0,0,size+padding*2,size+padding*2).data;
+      const padded=makeMask(size,z,x,y,coverage.withNeighbors(z,x,y),padding),alpha=padded.getContext('2d',{willReadFrequently:true}).getImageData(0,0,size+padding*2,size+padding*2).data;
       const paddedMask=new Uint8Array(alpha.length/4);for(let i=0;i<paddedMask.length;i++)paddedMask[i]=alpha[i*4+3]>=128?1:0;
       heights=softenTerrainEdge(heights,paddedMask,size,padding);
     }
@@ -127,25 +136,34 @@ export async function processTerrainTile(params,controller,chinaOnly,color,regio
       const sun=sunlightAt(time,lat,lon), vector=sun?lightVector(sun.azimuth,sun.altitude):[0,0,1],j=(gy*gridWidth+gx)*3;
       solar[j]=vector[0];solar[j+1]=vector[1];solar[j+2]=vector[2];
     }
-    const centerLat=tileLat(y+0.5,worldTiles), metersPerPixel=40075016.686*Math.cos(centerLat*Math.PI/180)/(size*worldTiles);
-    // Tile-local occlusion produces discontinuities at every tile boundary,
-    // especially at 80×. Use slope lighting only until cross-tile shadows exist.
-    const slopeScale=28/metersPerPixel;
+    const metersAt=py=>40075016.686*Math.cos(tileLat(y+py/size,worldTiles)*Math.PI/180)/(size*worldTiles);
+    const sunAt=(px,py)=>{const fx=Math.min(gridSize,Math.max(0,px*gridSize/size)),fy=Math.min(gridSize,Math.max(0,py*gridSize/size)),gx=Math.min(gridSize-1,Math.floor(fx)),gy=Math.min(gridSize-1,Math.floor(fy)),tx=fx-gx,ty=fy-gy,a=(gy*gridWidth+gx)*3,b=a+3,c=a+gridWidth*3,d=c+3;return [0,1,2].map(k=>(solar[a+k]*(1-tx)+solar[b+k]*tx)*(1-ty)+(solar[c+k]*(1-tx)+solar[d+k]*tx)*ty)};
+    const shadows=castShadow?buildShadowGrid({heights:shadeData.heights,valid:shadeData.valid,width:shadeData.width,pad:shadeData.pad,size,sunAt,metresAt:metersAt}):null;
+    let metersPerPixel=metersAt(0),slopeScale=28/metersPerPixel;
     for(let i=0;i<heights.length;i++){
-      const px=i%size,py=Math.floor(i/size),stride=shadeData?.width||size,offset=shadeData?.pad||0,values=shadeData?.heights||heights;
-      const span=color==='shade'?2:4,gx0=px+offset,gy0=py+offset,left=Math.max(0,gx0-span),right=Math.min(stride-1,gx0+span),top=Math.max(0,gy0-span),bottom=Math.min(stride-1,gy0+span);
+      const px=i%size,py=Math.floor(i/size);if(px===0){metersPerPixel=metersAt(py);slopeScale=28/metersPerPixel}
+      const stride=shadeData?.width||size,offset=shadeData?.pad||0,values=shadeData?.heights||heights;
+      const span=color==='shade'?2:analysis?1:4,gx0=px+offset,gy0=py+offset,left=Math.max(0,gx0-span),right=Math.min(stride-1,gx0+span),top=Math.max(0,gy0-span),bottom=Math.min(stride-1,gy0+span);
       const east=(values[gy0*stride+right]-values[gy0*stride+left])*slopeScale/(right-left);
       const north=(values[top*stride+gx0]-values[bottom*stride+gx0])*slopeScale/(bottom-top);
       const fx=px*gridSize/size,fy=py*gridSize/size,gx=Math.floor(fx),gy=Math.floor(fy),tx=fx-gx,ty=fy-gy;
       const a=(gy*gridWidth+gx)*3,b=a+3,c=a+gridWidth*3,d=c+3;
       const blend=k=>(solar[a+k]*(1-tx)+solar[b+k]*tx)*(1-ty)+(solar[c+k]*(1-tx)+solar[d+k]*tx)*ty;
       const vector=[blend(0),blend(1),blend(2)],day=solarBrightness(vector[2]);
+      const shadow=shadows?sampleShadowGrid(shadows,px,py,size):0;
       const j=i*4;
-      if(color==='shade'){
+      if(analysis){
+        const dx=(values[gy0*stride+right]-values[gy0*stride+left])/Math.max(1e-9,metersPerPixel*(right-left));
+        const dy=(values[top*stride+gx0]-values[bottom*stride+gx0])/Math.max(1e-9,metersPerPixel*(bottom-top));
+        const slope=terrainMetrics(dx,dy).slope;
+        if(color==='multi'){const nx=-dx,ny=-dy,norm=Math.hypot(nx,ny,1);let light=0;for(const azimuth of [45,135,225,315]){const a=azimuth*Math.PI/180;light+=Math.max(0,(nx*Math.sin(a)*.707+ny*Math.cos(a)*.707+.707)/norm)}light/=4;pixels[j]=0;pixels[j+1]=0;pixels[j+2]=0;pixels[j+3]=Math.round(Math.max(0,Math.min(0.65,(.70-light)*1.35))*255)}
+        else if(color==='slope'){const t=Math.min(1,slope/45);pixels[j]=Math.round(55+200*t);pixels[j+1]=Math.round(155-115*t);pixels[j+2]=Math.round(135-105*t);pixels[j+3]=Math.round(Math.min(1,slope/3)*210)}
+        else {const angle=(Math.atan2(-dx,-dy)+Math.PI*2)%(Math.PI*2);const hue=angle/(Math.PI*2)*6,k=Math.floor(hue),f=hue-k;const palette=[[240,115,90],[238,203,103],[128,190,128],[80,176,190],[105,127,211],[192,115,190],[240,115,90]];for(let c=0;c<3;c++)pixels[j+c]=Math.round(palette[k][c]*(1-f)+palette[k+1][c]*f);pixels[j+3]=Math.round(Math.min(1,slope/3)*185)}
+      }else if(color==='shade'){
         pixels[j]=0;pixels[j+1]=0;pixels[j+2]=0;
-        pixels[j+3]=Math.round(255*imageryShadowOpacity(day,lightFactor(east,north,vector,1),strength));
+        pixels[j+3]=Math.round(255*imageryShadowOpacity(day,lightFactor(east,north,vector,1)*(1-0.65*shadow),strength));
       }else{
-        const factor=(0.18+0.82*day)*lightFactor(east,north,vector,strength);
+        const factor=(0.18+0.82*day)*lightFactor(east,north,vector,strength)*(1-0.65*shadow*strength*day);
         const colorValue=elevationColor(heights[i]);
         pixels[j]=Math.min(255,colorValue[0]*factor);pixels[j+1]=Math.min(255,colorValue[1]*factor);pixels[j+2]=Math.min(255,colorValue[2]*factor*(1+0.20*(1-day)));
       }

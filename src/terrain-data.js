@@ -29,17 +29,19 @@ async function fetchOverview(z,x,y,signal){
   const url=new URL(`../terrain-overview/${tile.z}/${tile.x}/${tile.y}.webp`,moduleUrl);
   return {bitmap:await createImageBitmap(await cachedBlob(url,signal)),tile};
 }
-async function fetchDetail(z,x,y,signal){
+async function fetchDetail(z,x,y,signal,source){
   const controller=new AbortController(),abort=()=>controller.abort();
   const timer=setTimeout(abort,8000);signal.addEventListener('abort',abort,{once:true});
   try{
     if(signal.aborted)throw new DOMException('Aborted','AbortError');
-    const blob=await cachedBlob(`https://tiles.mapterhorn.com/${z}/${x}/${y}.webp`,controller.signal);
+    const url=source==='aws'?`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`:`https://tiles.mapterhorn.com/${z}/${x}/${y}.webp`;
+    const blob=await cachedBlob(url,controller.signal);
     return {bitmap:await createImageBitmap(blob),tile:null};
   }finally{clearTimeout(timer);signal.removeEventListener('abort',abort)}
 }
 
-export async function loadTerrainBitmap(z,x,y,chinaOnly,signal){
+export async function loadTerrainBitmap(z,x,y,chinaOnly,signal,source='mapterhorn'){
+  if(source==='aws')return fetchDetail(z,x,y,signal,source);
   if(chinaOnly&&z<=OVERVIEW_ZOOM){
     try{return await fetchOverview(z,x,y,signal)}catch(error){if(signal.aborted)throw error}
   }
@@ -47,5 +49,5 @@ export async function loadTerrainBitmap(z,x,y,chinaOnly,signal){
   // not cache an enlarged overview as a successful detail tile: doing so lets
   // adjacent tiles use different data resolutions until the cache is cleared.
   if(chinaOnly&&z>OVERVIEW_ZOOM&&typeof navigator!=='undefined'&&navigator.onLine===false)return fetchOverview(z,x,y,signal);
-  return fetchDetail(z,x,y,signal);
+  return fetchDetail(z,x,y,signal,source);
 }

@@ -31,3 +31,15 @@ test('在线细节请求失败不会把概览伪装成已加载的细节瓦片',
     assert.equal(calls,1);
   }finally{globalThis.fetch=oldFetch;if(oldNavigator)Object.defineProperty(globalThis,'navigator',oldNavigator);else delete globalThis.navigator}
 });
+
+test('选择 AWS 时明确请求 AWS 原始高程，不会悄悄替换为 Mapterhorn 离线概览',async()=>{
+  const oldFetch=globalThis.fetch,oldBitmap=globalThis.createImageBitmap,oldNavigator=Object.getOwnPropertyDescriptor(globalThis,'navigator'),calls=[];
+  try{
+    Object.defineProperty(globalThis,'navigator',{value:{onLine:false},configurable:true});
+    globalThis.fetch=async url=>{calls.push(String(url));return {ok:true,blob:async()=>new Blob(['aws'])}};
+    globalThis.createImageBitmap=async()=>({width:256,height:256});
+    const result=await loadTerrainBitmap(7,101,50,true,new AbortController().signal,'aws');
+    assert.equal(result.tile,null);assert.equal(result.bitmap.width,256);
+    assert.match(calls[0],/^https:\/\/s3\.amazonaws\.com\/elevation-tiles-prod\/terrarium\/7\/101\/50\.png$/);
+  }finally{globalThis.fetch=oldFetch;globalThis.createImageBitmap=oldBitmap;if(oldNavigator)Object.defineProperty(globalThis,'navigator',oldNavigator);else delete globalThis.navigator}
+});
