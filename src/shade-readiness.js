@@ -1,6 +1,6 @@
-// Terrain-draped rasters do not fade individual tiles in MapLibre. Keep the
-// mask hidden while visible tiles are being replaced, then show it together
-// rather than showing a patchwork of shaded and unshaded regions.
+// Hide the shadow overlay during its first load. Once visible, retain it as
+// the view changes: hiding the entire layer for each new tile makes the same
+// mountain flash between differently coloured appearances while panning.
 export function bindShadeReadiness(map,{setTimer=setTimeout,clearTimer=clearTimeout}={}){
   let opacity=0,retryTimer=null;
   function setOpacity(value){
@@ -19,14 +19,13 @@ export function bindShadeReadiness(map,{setTimer=setTimeout,clearTimer=clearTime
       if(source&&map.getLayer('satellite-shade')&&map.getLayoutProperty('satellite-shade','visibility')!=='none')source.setTiles([...source.tiles]);
     },20000);
   }
-  map.on('sourcedataloading',event=>{if(event.sourceId==='satellite-shade')setOpacity(0)});
   map.on('sourcedata',event=>{
     if(event.sourceId!=='satellite-shade'||!map.getSource('satellite-shade')||!map.isSourceLoaded('satellite-shade'))return;
     const tiles=map.style?.tileManagers?.['satellite-shade']?._inViewTiles?.getAllTiles?.()||[];
-    if(tiles.some(tile=>tile.state==='errored')){setOpacity(0);retryLater();return}
+    if(tiles.some(tile=>tile.state==='errored')){retryLater();return}
     if(retryTimer!==null){clearTimer(retryTimer);retryTimer=null}
     setOpacity(1);
   });
-  map.on('error',event=>{if(event.sourceId==='satellite-shade'){setOpacity(0);retryLater()}});
+  map.on('error',event=>{if(event.sourceId==='satellite-shade')retryLater()});
   map.on('remove',()=>{if(retryTimer!==null)clearTimer(retryTimer)});
 }

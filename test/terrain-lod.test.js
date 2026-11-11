@@ -58,6 +58,8 @@ test('地形绘制与高程数据使用同一个层级规则，依赖升级时�
   const code=readFileSync(new URL('../node_modules/maplibre-gl/dist/maplibre-gl.mjs',import.meta.url),'utf8');
   const patched=patchMapLibreTerrain(code);
   assert.match(patched,/calculateTileZoom:this\.tileManager\._source\.calculateTileZoom\?/);
+  assert.match(patched,/uniform highp sampler2D u_peak_previous/);
+  assert.match(patched,/uniform1f\(p\.mix,s\.__peakMix\?\?1\)/);
   assert.throws(()=>patchMapLibreTerrain('incompatible version'),/no longer matches/);
 });
 
