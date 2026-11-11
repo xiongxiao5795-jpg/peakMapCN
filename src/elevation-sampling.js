@@ -1,8 +1,12 @@
 import { loadTerrainBitmap } from './terrain-data.js';
+import { decodeTerrarium } from './terrain-integrity.js';
+import { repairAwsTerrain } from './terrain-integrity-browser.js';
+import { terrainSourceMaxZoom } from './terrain-source-level.js';
 
-// Samples the unmodified Terrarium heights, independent of display exaggeration.
+// Samples real-height Terrarium data, independent of display exaggeration;
+// clearly corrupted AWS stripes receive the same repair as the terrain mesh.
 export async function sampleElevations(points, {zoom=10, chinaOnly=true, signal, source='mapterhorn'}={}) {
-  const z=Math.max(0,Math.min(12,Math.floor(zoom))), n=2**z, groups=new Map();
+  const z=Math.max(0,Math.min(terrainSourceMaxZoom(source),Math.floor(zoom))), n=2**z, groups=new Map();
   points.forEach(([lng,lat],index)=>{
     const x=(lng+180)/360*n, phi=Math.max(-85.0511,Math.min(85.0511,lat))*Math.PI/180;
     const y=(1-Math.asinh(Math.tan(phi))/Math.PI)/2*n, tx=((Math.floor(x)%n)+n)%n, ty=Math.max(0,Math.min(n-1,Math.floor(y)));
@@ -16,10 +20,12 @@ export async function sampleElevations(points, {zoom=10, chinaOnly=true, signal,
       try {
         const canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;
         const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(bitmap,0,0);
+        if(source==='aws'&&z>=12)await repairAwsTerrain(ctx,canvas.width,z,group.tx,group.ty,chinaOnly,activeSignal);
+        const pixels=ctx.getImageData(0,0,canvas.width,canvas.height).data;
         for(const item of group.items){
           const fx=tile?(tile.dx+item.fx)/tile.scale:item.fx, fy=tile?(tile.dy+item.fy)/tile.scale:item.fy;
-          const pixel=ctx.getImageData(Math.max(0,Math.min(canvas.width-1,Math.floor(fx*canvas.width))),Math.max(0,Math.min(canvas.height-1,Math.floor(fy*canvas.height))),1,1).data;
-          if(pixel[3]>=128)values[item.index]=pixel[0]*256+pixel[1]+pixel[2]/256-32768;
+          const x=Math.max(0,Math.min(canvas.width-1,Math.floor(fx*canvas.width))),y=Math.max(0,Math.min(canvas.height-1,Math.floor(fy*canvas.height))),index=(y*canvas.width+x)*4;
+          if(pixels[index+3]>=128)values[item.index]=decodeTerrarium(pixels,index);
         }
       } finally {bitmap.close()}
     } catch(error) {if(activeSignal.aborted)throw error;}

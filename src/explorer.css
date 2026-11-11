@@ -33,7 +33,7 @@
 .overview-box{position:relative}.overview-head strong{cursor:grab;touch-action:none;user-select:none}.overview-head strong:active{cursor:grabbing}
 .overview-box #overview-map{width:100%;height:135px}.overview-box #overview-resize{position:absolute;right:2px;bottom:1px;width:24px;height:24px;padding:0;border:0;background:transparent;color:#526d59;font-size:18px;cursor:nwse-resize;touch-action:none}
 .overview-box small{padding-right:20px}
-@media(max-width:650px){.overview-box #overview-map{height:110px}}
+@media(max-width:650px){.overview-box #overview-map{height:140px}}
 .explorer-drawer .switch-row input[type=checkbox]{z-index:1;cursor:pointer}
 .overview-box{max-width:calc(100vw - 12px)}
 /* Keep the scale legible on both bright imagery and dark terrain without a card. */

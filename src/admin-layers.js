@@ -1,6 +1,11 @@
 import { loadAdministrativeGeometry, geometryBounds, boundsOverlap } from './admin.js';
 import { loadLocalAdministrativeBoundaries, loadLocalDistrictBoundaries } from './admin-boundaries.js';
 
+export function districtDisplayZoom(scope){
+  const code=String(scope?.properties?.adcode||'');
+  return /^\d{6}$/.test(code)&&code.slice(2)!=='0000'?6:8.5;
+}
+
 // Only load visible parent divisions; cache responses and never alter the camera or terrain source.
 export function createAdministrativeLayers(map,provinces,entries,onRecordsChanged){
   const entryByCode=new Map(entries.map(p=>[p.adcode,p])),featuresByCode=new Map();
@@ -62,7 +67,7 @@ export function createAdministrativeLayers(map,provinces,entries,onRecordsChange
     const directDistricts=all.filter(f=>entryByCode.get(String(f.properties.adcode))?.category==='district');
     const loadedParents=parents.filter((_,i)=>groups[i].status==='fulfilled').map(f=>f.properties.adcode).join(',');
     apply('admin-cities',cityFeatures,loadedParents,'city');
-    if(zoom<8.5){apply('admin-districts',[],'','district');return}
+    if(zoom<districtDisplayZoom(scope)){apply('admin-districts',[],'','district');return}
     const scopeCode=scope?String(scope.properties.adcode):null;
     const cityCode=scopeCode&&scopeCode.slice(2)!=='0000'?`${scopeCode.slice(0,4)}00`:null;
     const cityParents=selectVisible(cityCode?cityFeatures.filter(f=>String(f.properties.adcode)===cityCode):cityFeatures,area,12);

@@ -4,22 +4,31 @@ import {stableTerrainTileZoom,uniformImageryZoom,configureTerrainLod,configureMo
 import {readFileSync} from 'node:fs';
 import {patchMapLibreTerrain} from '../build/patch-maplibre-terrain.js';
 
-test('固定缩放下近处地形级别不随视角变化，远处逐步降低细节',()=>{
+test('固定缩放下地形数据统一使用同一细节层级',()=>{
   const near=stableTerrainTileZoom(7,1,0.5,1);
   assert.equal(near,6);
   assert.equal(stableTerrainTileZoom(7,1,0.1,1),near);
   assert.equal(stableTerrainTileZoom(7,8,0.1,1),4);
   const source={};configureTerrainLod({getSource:id=>id==='dem'?source:undefined});
   assert.equal(source.calculateTileZoom(7,1,0.5,1),near+0.7);
+  assert.equal(source.calculateTileZoom(7,8,0.5,1),near+0.7);
 });
 
-test('隔离行政区时近处与远处使用相同细节层级，恢复全图后重新分级',()=>{
+test('隔离行政区和恢复全图时近处与远处均使用相同细节层级',()=>{
   const source={},map={getSource:id=>id==='dem'?source:undefined};configureTerrainLod(map);
-  assert.notEqual(source.calculateTileZoom(9,1,1,1),source.calculateTileZoom(9,8,1,1));
+  assert.equal(source.calculateTileZoom(9,1,1,1),source.calculateTileZoom(9,8,1,1));
   map.__peakmapRegionIsolated=true;
   assert.equal(source.calculateTileZoom(9,1,1,1),source.calculateTileZoom(9,8,1,1));
   map.__peakmapRegionIsolated=false;
-  assert.notEqual(source.calculateTileZoom(9,1,1,1),source.calculateTileZoom(9,8,1,1));
+  assert.equal(source.calculateTileZoom(9,1,1,1),source.calculateTileZoom(9,8,1,1));
+});
+
+test('近景 AWS 可额外请求一层细节，远景与其他数据源保持原有策略',()=>{
+  const source={},map={getSource:id=>id==='dem'?source:undefined};configureTerrainLod(map);
+  const normal=source.calculateTileZoom(12.6,1,1,1),distant=source.calculateTileZoom(9,1,1,1);
+  map.__peakTerrainSource='aws';
+  assert.equal(source.calculateTileZoom(12.6,1,1,1),normal+1);
+  assert.equal(source.calculateTileZoom(9,1,1,1),distant);
 });
 
 test('影像整个视野共用级别，并限制大视野瓦片数量',()=>{

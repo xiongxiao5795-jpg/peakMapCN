@@ -1,7 +1,4 @@
-// Keep terrain near the camera at the same DEM level as the view tilts or
-// rotates. Use one coarser level than the nominal center zoom to control tile
-// count, and progressively coarsen terrain farther from the camera.
-// MapLibre still chooses and loads visible tiles and falls back to parents.
+// Calculate the DEM level from the current zoom and optionally the distance.
 export function stableTerrainTileZoom(centerZoom,distanceToTile,distanceZ,distanceToCenter,uniform=false){
   if(uniform)return centerZoom-1;
   const reference=Math.max(Number.EPSILON,distanceToCenter*2);
@@ -23,11 +20,21 @@ export function uniformImageryZoom(zoom,bounds,budget=192){
 export function configureTerrainLod(map){
   const source=map.getSource('dem');
   if(!source)return;
-  // Retain the stable near/far rule while asking for more detail than the
-  // previous full-level reduction. Touch devices use a smaller increase.
+  // The entire viewport must use the same target DEM level. Adjacent parent
+  // and child datasets can differ by hundreds of metres and form walls.
   const coarse=globalThis.matchMedia?.('(pointer: coarse)').matches===true;
-  const bias=coarse?0.35:0.7;
-  source.calculateTileZoom=(zoom,distance,vertical,center)=>stableTerrainTileZoom(zoom,distance,vertical,center,!!map.__peakmapRegionIsolated)+bias;
+  const bias=coarse?0.35:0.7,budget=coarse?96:256;let terrainKey='',terrainLimit=Infinity;
+  source.calculateTileZoom=(zoom,distance,vertical,center)=>{
+    // At close views, request up to one extra AWS level. Exaggerated mountain
+    // elevations can keep the camera from reaching the nominal zoom limit.
+    const detail=map.__peakTerrainSource==='aws'?Math.max(0,Math.min(1,zoom-11.5)):0;
+    const candidate=stableTerrainTileZoom(zoom,distance,vertical,center,true)+bias+detail;
+    if(!['getBounds','getCenter','getContainer','getZoom','getPitch','getBearing'].every(name=>typeof map[name]==='function'))return candidate;
+    const position=map.getCenter(),container=map.getContainer();
+    const key=[candidate,position.lng,position.lat,map.getZoom(),map.getPitch(),map.getBearing(),container.clientWidth,container.clientHeight].join(',');
+    if(key!==terrainKey){terrainKey=key;terrainLimit=uniformImageryZoom(candidate,map.getBounds().toArray(),budget)+0.999999}
+    return Math.min(candidate,terrainLimit);
+  };
   const imagery=map.getSource('satellite');
   if(imagery){
     const budget=globalThis.matchMedia?.('(pointer: coarse)').matches?192:384;

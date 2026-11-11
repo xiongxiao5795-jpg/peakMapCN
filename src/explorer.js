@@ -6,6 +6,10 @@ import { geometryBounds, boundsOverlap } from './admin.js';
 import { setupRoadOverlay } from './road-overlay.js';
 import { setupCenterScale } from './center-scale.js';
 import { configureTerrainLod, configureMobileTerrainTextures, limitTerrainSkirts, configureTerrainMesh } from './terrain-lod.js';
+import { terrainSourceMaxZoom, setTerrainSourceMaxZoom } from './terrain-source-level.js';
+import { processTerrainTile } from './terrain-processing.js';
+import { fitOverviewWithFocus } from './overview-viewport.js';
+import { configureCoherentTerrain } from './terrain-coherence.js';
 import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
 import { loadLocalAdministrativeBoundaries, loadLocalDistrictBoundaries } from './admin-boundaries.js';
 
@@ -23,18 +27,18 @@ const bookmarkKey='peakmap-bookmarks-v1';
 function getBookmarks(){try{const v=JSON.parse(localStorage.getItem(bookmarkKey)||'[]');return Array.isArray(v)?v:[]}catch{return []}}
 function saveBookmarks(list){try{localStorage.setItem(bookmarkKey,JSON.stringify(list));return true}catch{return false}}
 function captureThumbnail(map){try{const canvas=document.createElement('canvas');canvas.width=144;canvas.height=80;canvas.getContext('2d').drawImage(map.getCanvas(),0,0,144,80);return canvas.toDataURL('image/jpeg',0.55)}catch{return null}}
-function stateFor(map){return {center:map.getCenter().toArray(),zoom:map.getZoom(),bearing:map.getBearing(),pitch:map.getPitch(),base:$('#base-map').value,source:getTerrainSource(),mode:$('#terrain-mode').value,exaggeration:Number($('#exaggeration').value),style:$('#visual-style').value,time:$('#sun-time').value,light:Number($('#light-strength').value),shadow:$('#terrain-shadows').checked,softness:Number($('#terrain-softness').value),fog:Number($('#fog-strength').value),selected:map.__getExplorerSelection?.()||null,isolate:$('#isolate-toggle').checked,contours:$('#contours-toggle')?.checked||false,analysis:$('#analysis-mode')?.value||'none',blend:Number($('#terrain-blend')?.value||0)};}
+function stateFor(map){return {center:map.getCenter().toArray(),zoom:map.getZoom(),bearing:map.getBearing(),pitch:map.getPitch(),base:$('#base-map').value,source:getTerrainSource(),mode:$('#terrain-mode').value,exaggeration:Number($('#exaggeration').value),style:$('#visual-style').value,lightingStyle:$('#terrain-lighting-style').value,time:$('#sun-time').value,light:Number($('#light-strength').value),shadow:$('#terrain-shadows').checked,softness:Number($('#terrain-softness').value),fog:Number($('#fog-strength').value),selected:map.__getExplorerSelection?.()||null,isolate:$('#isolate-toggle').checked,contours:$('#contours-toggle')?.checked||false,analysis:$('#analysis-mode')?.value||'none',blend:Number($('#terrain-blend')?.value||0)};}
 function setValue(id,value,event='change'){const el=$(`#${id}`);if(value==null||!el)return;if(el.tagName==='SELECT'&&![...el.options].some(o=>o.value===String(value)))return;el.value=value;el.dispatchEvent(new Event(event,{bubbles:true}));}
 function restore(map,state){
   if(!state||!Array.isArray(state.center)||state.center.length!==2||!state.center.every(Number.isFinite)||Math.abs(state.center[0])>180||Math.abs(state.center[1])>85)return false;
-  for(const [id,value,event] of [['base-map',state.base],['terrain-source',state.source],['exaggeration',state.exaggeration,'input'],['terrain-mode',state.mode==='flat'?'flat':'3d'],['visual-style',state.style],['terrain-softness',state.softness,'input'],['fog-strength',state.fog,'input'],['sun-time',state.time,'input'],['light-strength',state.light,'input']])setValue(id,value,event);
+  for(const [id,value,event] of [['base-map',state.base],['terrain-source',state.source],['exaggeration',state.exaggeration,'input'],['terrain-mode',state.mode==='flat'?'flat':'3d'],['visual-style',state.style],['terrain-lighting-style',state.lightingStyle],['terrain-softness',state.softness,'input'],['fog-strength',state.fog,'input'],['sun-time',state.time,'input'],['light-strength',state.light,'input']])setValue(id,value,event);
   const clamp=(n,min,max,fallback)=>Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback;
   if(typeof state.shadow==='boolean'){$('#terrain-shadows').checked=state.shadow;$('#terrain-shadows').dispatchEvent(new Event('change'))}
   if(state.selected)map.__selectExplorerPlace?.(state.selected);
   if(typeof state.isolate==='boolean'){$('#isolate-toggle').checked=state.isolate;$('#isolate-toggle').dispatchEvent(new Event('change'))}
   if(typeof state.contours==='boolean'&&$('#contours-toggle')){$('#contours-toggle').checked=state.contours;$('#contours-toggle').dispatchEvent(new Event('change'))}
   if(state.analysis)setValue('analysis-mode',state.analysis);if(Number.isFinite(state.blend))setValue('terrain-blend',state.blend,'input');
-  map.easeTo({center:state.center,zoom:clamp(state.zoom,1,13,5),bearing:clamp(state.bearing,-360,360,0),pitch:state.mode==='flat'?0:clamp(state.pitch,0,75,55),duration:900});return true;
+  map.easeTo({center:state.center,zoom:clamp(state.zoom,1,14,5),bearing:clamp(state.bearing,-360,360,0),pitch:state.mode==='flat'?0:clamp(state.pitch,0,75,55),duration:900});return true;
 }
 export function sharedViewFromUrl(){try{const value=new URL(location.href).searchParams.get('view');if(!value)return null;const state=JSON.parse(decodeURIComponent(escape(atob(value.replace(/-/g,'+').replace(/_/g,'/')))));return state&&typeof state==='object'?state:null}catch{return null}}
 function shareUrl(map){const url=new URL(location.href);const state=stateFor(map);state.center=state.center.map(v=>+v.toFixed(5));for(const key of ['zoom','bearing','pitch'])state[key]=+state[key].toFixed(2);url.searchParams.set('view',btoa(unescape(encodeURIComponent(JSON.stringify(state)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''));return url.href;}
@@ -68,9 +72,9 @@ export function setupExplorer({map,maplibregl,adminAreas,notify,initialView,getS
   const reliefButton=$('#relief-toggle');reliefButton.onclick=()=>{openDrawer(true);selectDrawerTab('map');$('#drawer-relief').closest('details').open=true};
   $('#search-toggle').addEventListener('click',()=>openDrawer(false),{capture:true});
   setupCenterScale(map);
-  const overviewControl=document.createElement('div');overviewControl.className='overview-control';overviewControl.innerHTML=`<div id="overview-box" class="overview-box" hidden><div class="overview-head"><strong title="拖动移动鸟瞰窗口">鸟瞰地图</strong><select id="overview-range" aria-label="鸟瞰范围"><option value="national">全国</option><option value="regional">周边</option><option value="near">附近</option></select><button id="overview-zoom-in" title="放大鸟瞰">+</button><button id="overview-zoom-out" title="缩小鸟瞰">−</button></div><div id="overview-map"></div><label class="overview-settings">点击后范围 <select id="overview-target-scale"><option value="-1">宽广</option><option value="0" selected>标准</option><option value="1">放大</option></select></label><small>蓝色：选中区域 · 红色：主视图范围</small><button id="overview-resize" type="button" aria-label="拖动调整鸟瞰窗口大小" title="拖动调整窗口大小">↘</button></div><button id="overview-toggle" class="overview-toggle" aria-expanded="false" aria-controls="overview-box">▧ <span>鸟瞰</span></button>`;area.append(overviewControl);
-  let mini=null,miniMoving=false,manualZoom=null,manualOverviewCenter=null,miniRevision=0,miniLoading=false,miniCities=[],miniDistricts=[],selectedOverviewFeature=null,selectedOverviewCenter=null;
-  function overviewZoom(){const mode=$('#overview-range').value;return manualZoom??(mode==='national'?2.4:Math.max(2,Math.min(9,map.getZoom()-(mode==='near'?2:4))));}
+  const overviewControl=document.createElement('div');overviewControl.className='overview-control';overviewControl.innerHTML=`<div id="overview-box" class="overview-box" hidden><div class="overview-head"><strong title="拖动移动鸟瞰窗口">鸟瞰地图</strong><select id="overview-range" aria-label="鸟瞰范围"><option value="national">全国</option><option value="regional" selected>周边</option><option value="near">附近</option></select><button id="overview-zoom-in" title="放大鸟瞰">+</button><button id="overview-zoom-out" title="缩小鸟瞰">−</button></div><div id="overview-map"></div><label class="overview-settings">点击后范围 <select id="overview-target-scale"><option value="-1">宽广</option><option value="0" selected>标准</option><option value="1">放大</option></select></label><small>蓝色：选中区域 · 红色：主视图范围</small><button id="overview-resize" type="button" aria-label="拖动调整鸟瞰窗口大小" title="拖动调整窗口大小">↘</button></div><button id="overview-toggle" class="overview-toggle" aria-expanded="false" aria-controls="overview-box">▧ <span>鸟瞰</span></button>`;area.append(overviewControl);
+  let mini=null,miniMoving=false,manualZoomOffset=null,manualOverviewCenter=null,miniRevision=0,miniLoading=false,miniCities=[],miniDistricts=[],selectedOverviewFeature=null,selectedOverviewCenter=null,overviewFrame=null,divisionTimer=null;
+  const nationalBounds=adminAreas.features.reduce((all,feature)=>{const b=geometryBounds(feature);return [Math.min(all[0],b[0]),Math.min(all[1],b[1]),Math.max(all[2],b[2]),Math.max(all[3],b[3])]},[180,90,-180,-90]);
   const pointLabels=features=>({type:'FeatureCollection',features:features.filter(f=>Array.isArray(f.properties.centroid||f.properties.center)).map(f=>({type:'Feature',geometry:{type:'Point',coordinates:f.properties.centroid||f.properties.center},properties:{name:f.properties.name}}))});
   async function refreshOverviewDivisions(){
     if(!mini?.getSource('mini-city'))return;const revision=++miniRevision,zoom=mini.getZoom(),b=mini.getBounds(),bounds=[b.getWest(),b.getSouth(),b.getEast(),b.getNorth()];miniLoading=true;
@@ -81,24 +85,42 @@ export function setupExplorer({map,maplibregl,adminAreas,notify,initialView,getS
     if(revision!==miniRevision||!mini)return;miniCities=cities;miniDistricts=districts;miniLoading=false;
     mini.getSource('mini-city').setData({type:'FeatureCollection',features:cities});mini.getSource('mini-district').setData({type:'FeatureCollection',features:districts});mini.getSource('mini-city-labels').setData(pointLabels(cities));mini.getSource('mini-district-labels').setData(pointLabels(districts));
   }
+  function overviewView(){
+    const b=map.getBounds(),bounds=[b.getWest(),b.getSouth(),b.getEast(),b.getNorth()];
+    const include=other=>{bounds[0]=Math.min(bounds[0],other[0]);bounds[1]=Math.min(bounds[1],other[1]);bounds[2]=Math.max(bounds[2],other[2]);bounds[3]=Math.max(bounds[3],other[3])};
+    const w=map.getContainer().clientWidth,h=map.getContainer().clientHeight;
+    const corners=[[0,0],[w,0],[w,h],[0,h]].map(point=>map.unproject(point).toArray());
+    if(corners.every(point=>point.every(Number.isFinite))&&Math.max(...corners.map(p=>p[0]))-Math.min(...corners.map(p=>p[0]))<180)include([Math.min(...corners.map(p=>p[0])),Math.min(...corners.map(p=>p[1])),Math.max(...corners.map(p=>p[0])),Math.max(...corners.map(p=>p[1]))]);
+    const mainBounds=[...bounds];
+    if(selectedOverviewFeature)include(geometryBounds(selectedOverviewFeature));
+    if($('#overview-range').value==='national')include(nationalBounds);
+    const container=mini.getContainer(),width=container.clientWidth,height=container.clientHeight;
+    const center=manualOverviewCenter?.toArray?.()||selectedOverviewCenter||map.getCenter().toArray();
+    const mode=$('#overview-range').value,extraZoom=mode==='near'?0.3:mode==='national'?1.2:0.7;
+    const options={width,height,center,extraZoom};
+    // The range and selected area determine the automatic starting view, but
+    // only the main view limits manual zoom. Otherwise choosing “全国” makes
+    // it impossible to zoom in, even when the main view is much smaller.
+    return fitOverviewWithFocus(mainBounds,bounds,options,manualZoomOffset);
+  }
   function updateOverview(){
-    if(!mini?.getSource('viewport'))return;
+    if(!mini?.getSource('viewport')||$('#overview-box').hidden||!mini.getContainer().clientWidth||!mini.getContainer().clientHeight)return;
     const w=map.getContainer().clientWidth,h=map.getContainer().clientHeight;
     const corners=[[0,0],[w,0],[w,h],[0,h]].map(point=>map.unproject(point).toArray());
     const finite=corners.every(point=>point.every(Number.isFinite))&&Math.max(...corners.map(p=>p[0]))-Math.min(...corners.map(p=>p[0]))<180;
     const b=map.getBounds(),fallback=[[b.getWest(),b.getSouth()],[b.getEast(),b.getSouth()],[b.getEast(),b.getNorth()],[b.getWest(),b.getNorth()]];
     const ring=(finite?corners:fallback).map(([lng,lat])=>[Math.max(-180,Math.min(180,lng)),Math.max(-85,Math.min(85,lat))]);ring.push(ring[0]);
     mini.getSource('viewport').setData({type:'Feature',geometry:{type:'Polygon',coordinates:[ring]},properties:{}});
-    miniMoving=true;mini.jumpTo({center:manualOverviewCenter||selectedOverviewCenter||(manualZoom===null&&$('#overview-range').value==='national'?[103.5,35]:map.getCenter()),zoom:overviewZoom()});miniMoving=false;void refreshOverviewDivisions();
+    const view=overviewView();miniMoving=true;mini.jumpTo({center:view.center,zoom:view.zoom});miniMoving=false;
+    clearTimeout(divisionTimer);divisionTimer=setTimeout(()=>void refreshOverviewDivisions(),120);
   }
   function fitOverviewSelection(){
     if(!mini?.getSource('overview-selection'))return;
     mini.getSource('overview-selection').setData(selectedOverviewFeature||empty);
     if(!selectedOverviewFeature){selectedOverviewCenter=null;updateOverview();return}
-    const [w,s,e,n]=geometryBounds(selectedOverviewFeature);miniMoving=true;
-    mini.fitBounds([[w,s],[e,n]],{padding:20,maxZoom:9,duration:0});selectedOverviewCenter=mini.getCenter();manualZoom=mini.getZoom();miniMoving=false;updateOverview();
+    const [w,s,e,n]=geometryBounds(selectedOverviewFeature);selectedOverviewCenter=[(w+e)/2,(s+n)/2];updateOverview();
   }
-  map.on('peak:selection',event=>{selectedOverviewFeature=event.feature||null;selectedOverviewCenter=null;manualOverviewCenter=null;if(mini)fitOverviewSelection()});
+  map.on('peak:selection',event=>{selectedOverviewFeature=event.feature||null;selectedOverviewCenter=null;manualOverviewCenter=null;manualZoomOffset=null;if(mini)fitOverviewSelection()});
   function chooseOverviewFeature(feature,layer){
     const code=String(feature.properties.adcode),kind=layer==='mini-district-fill'||feature.properties.level==='district'?'district':layer==='mini-city-fill'?'city':'province';
     selectPlace(`${kind}-${code}`);const [w,s,e,n]=geometryBounds(feature),bounds=[[w,s],[e,n]],camera=map.cameraForBounds(bounds,{pitch:0,bearing:0,padding:35,maxZoom:kind==='province'?7:kind==='city'?10:12});
@@ -106,7 +128,7 @@ export function setupExplorer({map,maplibregl,adminAreas,notify,initialView,getS
   }
   function createOverview(){
     const labelLayer=(id,source,minzoom,maxzoom)=>({id,type:'symbol',source,minzoom,...(maxzoom?{maxzoom}:{}),layout:{'text-field':['get','name'],'text-font':['sans-serif'],'text-size':10,'text-allow-overlap':false},paint:{'text-color':'#283b30','text-halo-color':'#edf2e5','text-halo-width':1}});
-    mini=new maplibregl.Map({container:'overview-map',interactive:true,attributionControl:false,center:[103.5,35],zoom:2.4,style:{version:8,sources:{china:{type:'geojson',data:adminAreas},'mini-province-labels':{type:'geojson',data:pointLabels(adminAreas.features)},'mini-city':{type:'geojson',data:empty},'mini-city-labels':{type:'geojson',data:empty},'mini-district':{type:'geojson',data:empty},'mini-district-labels':{type:'geojson',data:empty},'overview-selection':{type:'geojson',data:empty},viewport:{type:'geojson',data:empty}},layers:[{id:'background',type:'background',paint:{'background-color':'#d3dfd7'}},{id:'mini-province-fill',type:'fill',source:'china',paint:{'fill-color':'#aebfa8','fill-outline-color':'#708b77'}},{id:'mini-city-fill',type:'fill',source:'mini-city',minzoom:4.8,paint:{'fill-color':'#aabda8','fill-outline-color':'#819b86','fill-opacity':0.6}},{id:'mini-district-fill',type:'fill',source:'mini-district',minzoom:7.1,paint:{'fill-color':'#aec2ae','fill-outline-color':'#8aa28d','fill-opacity':0.6}},{id:'overview-selected-fill',type:'fill',source:'overview-selection',paint:{'fill-color':'#4479c4','fill-opacity':0.16}},{id:'overview-selected-line',type:'line',source:'overview-selection',paint:{'line-color':'#204fbd','line-width':2}},{id:'extent',type:'fill',source:'viewport',paint:{'fill-color':'#d54c36','fill-opacity':0.18}},{id:'extent-line',type:'line',source:'viewport',paint:{'line-color':'#bd352b','line-width':1.5}},labelLayer('province-labels','mini-province-labels',0,4.8),labelLayer('city-labels','mini-city-labels',4.8,7.1),labelLayer('district-labels','mini-district-labels',7.1)]}});
+    mini=new maplibregl.Map({container:'overview-map',interactive:true,attributionControl:false,center:[103.5,35],zoom:2.4,minZoom:-2,style:{version:8,sources:{china:{type:'geojson',data:adminAreas},'mini-province-labels':{type:'geojson',data:pointLabels(adminAreas.features)},'mini-city':{type:'geojson',data:empty},'mini-city-labels':{type:'geojson',data:empty},'mini-district':{type:'geojson',data:empty},'mini-district-labels':{type:'geojson',data:empty},'overview-selection':{type:'geojson',data:empty},viewport:{type:'geojson',data:empty}},layers:[{id:'background',type:'background',paint:{'background-color':'#d3dfd7'}},{id:'mini-province-fill',type:'fill',source:'china',paint:{'fill-color':'#aebfa8','fill-outline-color':'#708b77'}},{id:'mini-city-fill',type:'fill',source:'mini-city',minzoom:4.8,paint:{'fill-color':'#aabda8','fill-outline-color':'#819b86','fill-opacity':0.6}},{id:'mini-district-fill',type:'fill',source:'mini-district',minzoom:7.1,paint:{'fill-color':'#aec2ae','fill-outline-color':'#8aa28d','fill-opacity':0.6}},{id:'overview-selected-fill',type:'fill',source:'overview-selection',paint:{'fill-color':'#4479c4','fill-opacity':0.16}},{id:'overview-selected-line',type:'line',source:'overview-selection',paint:{'line-color':'#204fbd','line-width':2}},{id:'extent',type:'fill',source:'viewport',paint:{'fill-color':'#d54c36','fill-opacity':0.18}},{id:'extent-line',type:'line',source:'viewport',paint:{'line-color':'#bd352b','line-width':1.5}},labelLayer('province-labels','mini-province-labels',0,4.8),labelLayer('city-labels','mini-city-labels',4.8,7.1),labelLayer('district-labels','mini-district-labels',7.1)]}});
     if(import.meta.env.DEV)window.__peakOverview=mini;
     mini.on('load',()=>{if(selectedOverviewFeature)fitOverviewSelection();else updateOverview()});mini.on('click',e=>{
       if(miniLoading){notify('正在加载鸟瞰行政区，请稍候');return}
@@ -115,7 +137,7 @@ export function setupExplorer({map,maplibregl,adminAreas,notify,initialView,getS
       if(district)chooseOverviewFeature(district,'mini-district-fill');else if(city)chooseOverviewFeature(city,'mini-city-fill');else if(province)chooseOverviewFeature(province,'mini-province-fill');else map.easeTo({center:e.lngLat,pitch:map.getPitch(),duration:500});
     });
     mini.on('move',()=>{if(!miniMoving)manualOverviewCenter=mini.getCenter()});
-    mini.on('dragend',()=>{if(!miniMoving){manualOverviewCenter=mini.getCenter();void refreshOverviewDivisions()}});mini.on('zoomend',()=>{if(!miniMoving){manualZoom=mini.getZoom();manualOverviewCenter=mini.getCenter();void refreshOverviewDivisions()}});mini.scrollZoom.enable();
+    mini.on('moveend',()=>{if(!miniMoving){manualOverviewCenter=mini.getCenter();manualZoomOffset=mini.getZoom()-overviewView().fitZoom;clearTimeout(divisionTimer);divisionTimer=setTimeout(()=>void refreshOverviewDivisions(),120)}});mini.scrollZoom.enable();
   }
   const overviewToggle=$('#overview-toggle');overviewToggle.title='点击打开或收起鸟瞰；拖动可移动';let toggleDrag=null,suppressToggleClick=false,suppressToggleTimer;
   function clampOverviewPosition(){
@@ -145,7 +167,8 @@ export function setupExplorer({map,maplibregl,adminAreas,notify,initialView,getS
     if(overviewControl.style.top){const shift=buttonTop-overviewToggle.getBoundingClientRect().top;overviewControl.style.top=`${(parseFloat(overviewControl.style.top)||0)+shift}px`}
     clampOverviewPosition();if(!box.hidden){if(!mini)createOverview();else{mini.resize();updateOverview()}}
   };
-  $('#overview-range').onchange=()=>{manualZoom=null;manualOverviewCenter=null;selectedOverviewCenter=null;updateOverview()};for(const [id,delta] of [['overview-zoom-in',1],['overview-zoom-out',-1]])$(`#${id}`).onclick=()=>{if(mini){manualZoom=Math.max(2,Math.min(10,mini.getZoom()+delta));mini.easeTo({zoom:manualZoom})}};
+  $('#overview-range').onchange=()=>{manualZoomOffset=null;manualOverviewCenter=null;updateOverview()};for(const [id,delta] of [['overview-zoom-in',1],['overview-zoom-out',-1]])$(`#${id}`).onclick=()=>{if(mini)mini.easeTo({zoom:Math.max(-2,Math.min(10,mini.getZoom()+delta))})};
+  map.on('move',()=>{if(overviewFrame===null)overviewFrame=requestAnimationFrame(()=>{overviewFrame=null;updateOverview()})});
   map.on('moveend',updateOverview);
   const overviewHead=$('.overview-head strong'),overviewBox=$('#overview-box'),overviewMap=$('#overview-map'),resizeHandle=$('#overview-resize');
   let overviewDrag=null,overviewResize=null;
@@ -153,7 +176,7 @@ export function setupExplorer({map,maplibregl,adminAreas,notify,initialView,getS
   overviewHead.addEventListener('pointermove',event=>{if(overviewDrag?.id!==event.pointerId)return;const x=Math.max(0,Math.min(overviewDrag.parent.width-overviewControl.offsetWidth,event.clientX-overviewDrag.parent.left-overviewDrag.dx)),y=Math.max(0,Math.min(overviewDrag.parent.height-overviewControl.offsetHeight,event.clientY-overviewDrag.parent.top-overviewDrag.dy));overviewControl.style.left=`${x}px`;overviewControl.style.top=`${y}px`;overviewControl.style.bottom='auto'});
   const stopOverviewDrag=event=>{if(overviewDrag?.id===event.pointerId)overviewDrag=null};overviewHead.addEventListener('pointerup',stopOverviewDrag);overviewHead.addEventListener('pointercancel',stopOverviewDrag);
   let overviewResizeTimer;
-  function resizeOverview(width,height){overviewBox.style.width=`${Math.max(190,Math.min(area.clientWidth-12,width))}px`;overviewMap.style.height=`${Math.max(100,Math.min(area.clientHeight-130,height))}px`;clearTimeout(overviewResizeTimer);overviewResizeTimer=setTimeout(()=>{if(mini){mini.resize();if(selectedOverviewFeature)fitOverviewSelection();else updateOverview()}},80)}
+  function resizeOverview(width,height){overviewBox.style.width=`${Math.max(190,Math.min(area.clientWidth-12,width))}px`;overviewMap.style.height=`${Math.max(140,Math.min(area.clientHeight-130,height))}px`;clearTimeout(overviewResizeTimer);overviewResizeTimer=setTimeout(()=>{if(mini){mini.resize();if(selectedOverviewFeature)fitOverviewSelection();else updateOverview()}},80)}
   resizeHandle.addEventListener('pointerdown',event=>{if(event.button!==0)return;overviewResize={id:event.pointerId,x:event.clientX,y:event.clientY,width:overviewBox.offsetWidth,height:overviewMap.offsetHeight};resizeHandle.setPointerCapture(event.pointerId);event.preventDefault()});
   resizeHandle.addEventListener('pointermove',event=>{if(overviewResize?.id===event.pointerId)resizeOverview(overviewResize.width+event.clientX-overviewResize.x,overviewResize.height+event.clientY-overviewResize.y)});
   const stopOverviewResize=event=>{if(overviewResize?.id===event.pointerId)overviewResize=null};resizeHandle.addEventListener('pointerup',stopOverviewResize);resizeHandle.addEventListener('pointercancel',stopOverviewResize);
@@ -175,21 +198,22 @@ export function setupExplorer({map,maplibregl,adminAreas,notify,initialView,getS
   function openCompare(){
     compare?.remove();compare=null;compareBox.hidden=false;leftBadge.hidden=false;area.classList.add('comparing');map.resize();
     const current=getTerrainSource(),other=current==='aws'?'mapterhorn':'aws',style=map.getStyle();
-    for(const id of ['dem','relief','satellite-shade','explorer-slope','explorer-aspect','explorer-multi']){const source=style.sources[id];if(source?.tiles)source.tiles=source.tiles.map(url=>url.replace(/([?&]source=)(aws|mapterhorn)/,`$1${other}`))}
+    for(const id of ['dem','relief','satellite-shade','explorer-slope','explorer-aspect','explorer-multi']){const source=style.sources[id];if(source?.tiles){source.maxzoom=terrainSourceMaxZoom(other);source.tiles=source.tiles.map(url=>url.replace(/([?&]source=)(aws|mapterhorn)/,`$1${other}`))}}
     if(style.sources['explorer-contours'])style.sources['explorer-contours'].tiles=[contourUrl(other)];
     if($('#terrain-mode').value==='flat')delete style.terrain;else style.terrain={source:'dem',exaggeration:Number($('#exaggeration').value)};
     leftBadge.textContent=`左侧：${sourceName(current)}`;$('#compare-right-label').textContent=`右侧：${sourceName(other)}`;
-    compare=new maplibregl.Map({container:'compare-map',attributionControl:false,center:map.getCenter(),zoom:map.getZoom(),bearing:map.getBearing(),pitch:map.getPitch(),maxPitch:$('#terrain-mode').value==='flat'?0:75,style});
-    compare.__peakmapRegionIsolated=!!map.__peakmapRegionIsolated;
+    compare=new maplibregl.Map({container:'compare-map',attributionControl:false,center:map.getCenter(),zoom:map.getZoom(),bearing:map.getBearing(),pitch:map.getPitch(),minZoom:1,maxZoom:14,maxPitch:$('#terrain-mode').value==='flat'?0:75,style});
+    compare.__peakmapRegionIsolated=!!map.__peakmapRegionIsolated;compare.__peakSource=other;compare.__peakTerrainSource=other;
     if(import.meta.env.DEV)window.__peakCompare=compare;copyCompareLabels();
-    compare.on('terrain',()=>{configureTerrainMesh(compare);limitTerrainSkirts(compare);configureMobileTerrainTextures(compare)});
-    compare.on('load',()=>{configureTerrainLod(compare);configureTerrainMesh(compare);limitTerrainSkirts(compare);configureMobileTerrainTextures(compare);setupRoadOverlay(compare,{enabled:()=>$('#roads-toggle').checked,exaggeration:()=>Number($('#exaggeration').value),allowed:roadAllowed});syncCompare()});compare.on('move',syncFromCompare);compare.on('error',event=>{if(event.error?.name!=='AbortError'&&!compareBox.dataset.failed){compareBox.dataset.failed='1';notify(`${sourceName(other)} 对比数据加载失败，请检查网络`)}});
+    compare.on('terrain',()=>{configureTerrainMesh(compare);configureCoherentTerrain(compare);limitTerrainSkirts(compare);configureMobileTerrainTextures(compare)});
+    compare.on('load',()=>{configureTerrainLod(compare);configureTerrainMesh(compare);configureCoherentTerrain(compare);limitTerrainSkirts(compare);configureMobileTerrainTextures(compare);setupRoadOverlay(compare,{enabled:()=>$('#roads-toggle').checked,exaggeration:()=>Number($('#exaggeration').value),allowed:roadAllowed});syncCompare()});compare.on('move',syncFromCompare);compare.on('error',event=>{if(event.error?.name!=='AbortError'&&!compareBox.dataset.failed){compareBox.dataset.failed='1';notify(`${sourceName(other)} 对比数据加载失败，请检查网络`)}});
   }
   $('#compare-toggle').onchange=e=>{if(e.target.checked){delete compareBox.dataset.failed;openCompare()}else closeCompare()};
   map.on('move',syncCompare);$('#exaggeration').addEventListener('input',syncCompare);
   map.on('peak:terrain-source',()=>{if($('#compare-toggle').checked)openCompare()});
   map.on('peak:terrain-mode',()=>{if($('#compare-toggle').checked)openCompare()});
   map.on('peak:scope-change',()=>{if($('#compare-toggle').checked)openCompare()});
+  map.on('peak:lighting',event=>{if(!compare)return;const china=$('#china-only').checked;for(const [id,type] of [['relief','relief'],['satellite-shade','shade']])compare.getSource(id)?.setTiles([tileTemplate(type,china,event.lighting,compare.__peakSource)])});
   for(const id of ['base-map','china-only','roads-toggle','rail-toggle','water-toggle','admin-toggle'])$(`#${id}`).addEventListener('change',()=>{if($('#compare-toggle').checked)setTimeout(openCompare,0)});
   map.addSource('wayback',{type:'raster',tiles:['https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/10/{z}/{y}/{x}'],tileSize:256,maxzoom:19});
   map.addLayer({id:'wayback',type:'raster',source:'wayback',layout:{visibility:'none'},paint:{'raster-fade-duration':150}},'satellite-shade');
@@ -197,17 +221,25 @@ export function setupExplorer({map,maplibregl,adminAreas,notify,initialView,getS
   $('#history-load').onclick=async()=>{const button=$('#history-load');button.disabled=true;button.textContent='正在加载…';try{const response=await fetch('https://s3-us-west-2.amazonaws.com/config.maptiles.arcgis.com/waybackconfig.json');if(!response.ok)throw Error('catalog');const data=await response.json();releases=Object.values(data).filter(v=>/^https:\/\/wayback\.maptiles\.arcgis\.com\//.test(v.itemURL||'')&&/\d{4}-\d{2}-\d{2}/.test(v.itemTitle||''));releases.sort((a,b)=>b.itemTitle.localeCompare(a.itemTitle));const select=$('#history-release');select.innerHTML='<option value="">当前影像</option>'+releases.map((v,i)=>`<option value="${i}">${v.itemTitle.match(/\d{4}-\d{2}-\d{2}/)[0]}</option>`).join('');button.textContent=`已加载 ${releases.length} 个版本`;if(!releases.length)throw Error('empty')}catch{button.textContent='重新加载历史影像目录';notify('历史影像目录加载失败，请检查网络')}finally{button.disabled=false}};
   function history(){const value=$('#history-release').value,entry=value===''?null:releases[Number(value)];if(entry){const url=entry.itemURL.replace('{level}','{z}').replace('{row}','{y}').replace('{col}','{x}');map.getSource('wayback').setTiles([url]);if($('#base-map').value!=='satellite')setValue('base-map','satellite');}map.setLayoutProperty('wayback','visibility',entry&&$('#base-map').value==='satellite'?'visible':'none');}
   $('#history-release').onchange=history;$('#base-map').addEventListener('change',history);
-  const contours=Object.fromEntries([['mapterhorn','https://tiles.mapterhorn.com/{z}/{x}/{y}.webp'],['aws','https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png']].map(([name,url])=>{const source=new mlcontour.DemSource({id:`contour-${name}`,url,encoding:'terrarium',maxzoom:12,worker:true,cacheSize:35,timeoutMs:10000});source.setupMaplibre(maplibregl);return [name,source]}));
+  const contours=Object.fromEntries([['mapterhorn','https://tiles.mapterhorn.com/{z}/{x}/{y}.webp'],['aws','https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png']].map(([name,url])=>{
+    const source=new mlcontour.DemSource({id:`contour-${name}`,url,encoding:'terrarium',maxzoom:12,worker:name!=='aws',cacheSize:35,timeoutMs:10000});
+    if(name==='aws')source.manager.getTile=async(url,controller)=>{
+      const match=url.match(/\/(\d+)\/(\d+)\/(\d+)\.png/);if(!match)throw new Error('Invalid contour elevation tile');
+      const [,z,x,y]=match,{data}=await processTerrainTile({url:`dem-world://tiles.mapterhorn.com/${z}/${x}/${y}.webp?source=aws`},controller,false,false);
+      return {data:new Blob([data],{type:'image/png'})};
+    };
+    source.setupMaplibre(maplibregl);return [name,source];
+  }));
   const contourUrl=name=>contours[name].contourProtocolUrl({thresholds:{5:[500,1000],7:[200,1000],9:[100,500],11:[50,200],12:[20,100]},contourLayer:'contours',elevationKey:'ele',levelKey:'level'});
   map.addSource('explorer-contours',{type:'vector',tiles:[contourUrl(getTerrainSource())],maxzoom:12});
   map.addLayer({id:'explorer-contour-lines',type:'line',source:'explorer-contours','source-layer':'contours',minzoom:5,layout:{visibility:'none'},paint:{'line-color':'#fff5c7','line-opacity':0.65,'line-width':['match',['get','level'],1,1.3,0.55]}},'outside-china-mask');
   map.addLayer({id:'explorer-contour-labels',type:'symbol',source:'explorer-contours','source-layer':'contours',minzoom:8,filter:['>', ['get','level'],0],layout:{visibility:'none','symbol-placement':'line','text-field':['concat',['to-string',['get','ele']],' m'],'text-font':['sans-serif'],'text-size':10,'symbol-spacing':350},paint:{'text-color':'#fff6d2','text-halo-color':'#263b2d','text-halo-width':1}},'outside-china-mask');
   $('#contours-toggle').onchange=e=>{for(const id of ['explorer-contour-lines','explorer-contour-labels'])map.setLayoutProperty(id,'visibility',e.target.checked?'visible':'none')};
-  for(const mode of ['slope','aspect','multi']){map.addSource(`explorer-${mode}`,{type:'raster',tiles:[tileTemplate(mode,$('#china-only').checked)],tileSize:512,maxzoom:12});map.addLayer({id:`explorer-${mode}`,type:'raster',source:`explorer-${mode}`,layout:{visibility:'none'},paint:{'raster-opacity':0.7,'raster-fade-duration':0}},'outside-china-mask')}
+  for(const mode of ['slope','aspect','multi']){map.addSource(`explorer-${mode}`,{type:'raster',tiles:[tileTemplate(mode,$('#china-only').checked)],tileSize:512,maxzoom:terrainSourceMaxZoom(getTerrainSource())});map.addLayer({id:`explorer-${mode}`,type:'raster',source:`explorer-${mode}`,layout:{visibility:'none'},paint:{'raster-opacity':0.7,'raster-fade-duration':0}},'outside-china-mask')}
   function analysis(){const mode=$('#analysis-mode').value;for(const name of ['slope','aspect']){map.setLayoutProperty(`explorer-${name}`,'visibility',name===mode?'visible':'none');map.setPaintProperty(`explorer-${name}`,'raster-opacity',Number($('#analysis-opacity').value)/100)}$('#analysis-opacity-value').textContent=`${$('#analysis-opacity').value}%`;$('#analysis-legend').textContent=mode==='slope'?'绿：平缓　黄：起伏　红：陡峭。基于原始高程估算。':mode==='aspect'?'颜色表示坡向：红北、黄东、绿南、蓝西；平地透明。基于原始高程估算。':'坡度和坡向按原始高程估算，与视觉倍率无关；详细高程及等高线需要联网。'}
   $('#multi-toggle').onchange=e=>map.setLayoutProperty('explorer-multi','visibility',e.target.checked?'visible':'none');
   $('#analysis-mode').onchange=analysis;$('#analysis-opacity').oninput=analysis;$('#china-only').addEventListener('change',()=>{for(const mode of ['slope','aspect','multi'])map.getSource(`explorer-${mode}`).setTiles([tileTemplate(mode,$('#china-only').checked)])});
-  map.on('peak:terrain-source',()=>{map.getSource('explorer-contours').setTiles([contourUrl(getTerrainSource())]);for(const mode of ['slope','aspect','multi'])map.getSource(`explorer-${mode}`).setTiles([tileTemplate(mode,$('#china-only').checked)])});
+  map.on('peak:terrain-source',()=>{map.getSource('explorer-contours').setTiles([contourUrl(getTerrainSource())]);for(const mode of ['slope','aspect','multi']){const source=map.getSource(`explorer-${mode}`);setTerrainSourceMaxZoom(source,getTerrainSource());source.setTiles([tileTemplate(mode,$('#china-only').checked)])}});
   function blend(){const value=Number($('#terrain-blend').value)/100;$('#terrain-blend-value').value=`${Math.round(value*100)}%`;if($('#base-map').value==='satellite'){map.setLayoutProperty('relief','visibility',value?'visible':'none');map.moveLayer('relief','satellite-shade');map.setPaintProperty('relief','raster-opacity',value)}else map.setPaintProperty('relief','raster-opacity',1)}
   $('#terrain-blend').oninput=blend;$('#base-map').addEventListener('change',()=>setTimeout(blend,0));$('#terrain-detail').addEventListener('change',()=>setTimeout(blend,0));
   $('#relief-palette').onchange=e=>{const config={natural:[0,0,0],sand:[-20,-.25,.07],ink:[0,-1,.12],high:[10,-.45,.17]}[e.target.value];map.setPaintProperty('relief','raster-hue-rotate',config[0]);map.setPaintProperty('relief','raster-saturation',config[1]);map.setPaintProperty('relief','raster-brightness-min',config[2]);};

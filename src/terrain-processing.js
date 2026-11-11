@@ -1,13 +1,15 @@
 import provinces from '../data/china-provinces.json';
 import {createTileCoverage} from './tile-coverage.js';
 import {createEmptyTileFactory} from './empty-tile.js';
-import { lightVector, lightFactor, solarBrightness, imageryShadowOpacity } from './lighting.js';
+import { lightVector, lightFactor, solarBrightness, imageryShadowOpacity, terrainLightIntensity, terrainShade } from './lighting.js';
 import { sunlightAt } from './sun.js';
 import { loadTerrainBitmap, hasOverviewTile } from './terrain-data.js';
 import { terrainMetrics } from './terrain-metrics.js';
 import { buildShadowGrid, sampleShadowGrid } from './terrain-shadows.js';
 import { smoothTerrainHeights } from './terrain-smoothing.js';
 import { softenTerrainEdge } from './terrain-edge.js';
+import { repairTerrainStripes } from './terrain-integrity.js';
+import { repairAwsTerrain } from './terrain-integrity-browser.js';
 
 // The final unnamed feature is a cartographic South China Sea inset, not land.
 export const adminAreas = {...provinces, features: provinces.features.filter(f => f.properties.name)};
@@ -64,6 +66,7 @@ async function paddedShadeHeights(raw,size,z,x,y,chinaOnly,controller,smooth,cov
   try{await Promise.all(jobs)}finally{clearTimeout(neighborTimer);controller.signal.removeEventListener('abort',abortNeighbors)}
   if(controller.signal.aborted)throw new DOMException('Aborted','AbortError');
   const pixels=ctx.getImageData(0,0,width,width).data,availability=availableCtx.getImageData(0,0,width,width).data,heights=new Float32Array(width*width),mask=chinaOnly?new Uint8Array(width*width):null,valid=new Uint8Array(width*width);
+  if(source==='aws'&&z>=12)repairTerrainStripes(pixels,width,width);
   for(let i=0;i<heights.length;i++){const j=i*4,isValid=pixels[j+3]>=128;heights[i]=isValid?pixels[j]*256+pixels[j+1]+pixels[j+2]/256-32768:0;if(mask)mask[i]=isValid?1:0;valid[i]=isValid&&availability[j+3]>=128?1:0}
   return {heights:smoothTerrainHeights(heights,width,width,smooth,mask),valid,width,pad};
 }
@@ -91,20 +94,22 @@ export async function processImageryTile(params,controller,chinaOnly,region=null
 export async function processTerrainTile(params,controller,chinaOnly,color,region=null){
   const match=params.url.match(/\/(\d+)\/(\d+)\/(\d+)\.webp/);if(!match)throw new Error('Invalid terrain tile URL');
   const [,zs,xs,ys]=match, z=+zs,x=+xs,y=+ys, coverage=coverageFor(region)||(chinaOnly?tilePolygons:null),parts=coverage?coverage(z,x,y):null;
-  // A 128-pixel translucent shade mask is filtered over satellite imagery;
-  // this keeps overlap processing affordable on mobile devices.
-  const size=color==='shade'?128:512;
+  const query=new URLSearchParams(params.url.split('?')[1]||''),source=query.get('source')==='aws'?'aws':'mapterhorn';
+  // Preserve the source's own DEM grid: enlarging 256 encoded RGB pixels to
+  // 512 creates no new elevation information. Shade gets a finer 256px grid.
+  const size=color==='shade'||source==='aws'?256:512;
   // Never request a remote elevation tile that does not intersect a land polygon.
   if(coverage&&!parts.length)return emptyTile(size,!color);
   const canvas=makeCanvas(size),ctx=canvas.getContext('2d',{willReadFrequently:true});
   if(!color){ctx.fillStyle='rgb(128,0,0)';ctx.fillRect(0,0,size,size)}
-  const overview=chinaOnly||!!region,query=new URLSearchParams(params.url.split('?')[1]||''),source=query.get('source')==='aws'?'aws':'mapterhorn';
+  const overview=chinaOnly||!!region;
   const {bitmap,tile}=await loadTerrainBitmap(z,x,y,overview,controller.signal,source),raw=makeCanvas(size);const rawctx=raw.getContext('2d',{willReadFrequently:true});
   // Interpolating encoded RGB channels produces false heights at byte boundaries.
   rawctx.imageSmoothingEnabled=false;
   if(tile&&tile.scale>1){const crop=bitmap.width/tile.scale;rawctx.drawImage(bitmap,tile.dx*crop,tile.dy*crop,crop,crop,0,0,size,size)}
   else rawctx.drawImage(bitmap,0,0,size,size);
   bitmap.close();
+  if(source==='aws'&&z>=12)await repairAwsTerrain(rawctx,size,z,x,y,overview,controller.signal);
   const smooth=Math.max(0,Math.min(100,Number(query.get('smooth'))||0));
   const landMask=coverage?makeMask(size,z,x,y,parts):null;
   if(color||smooth||coverage){
@@ -118,9 +123,11 @@ export async function processTerrainTile(params,controller,chinaOnly,color,regio
     }
     let heights=smoothTerrainHeights(original,size,size,smooth,mask);
     const analysis=color==='slope'||color==='aspect'||color==='multi',castShadow=!analysis&&!!color&&query.get('shadow')!=='0';
-    const shadeData=(color==='shade'||analysis||castShadow)?await paddedShadeHeights(raw,size,z,x,y,overview,controller,analysis?0:smooth,null,castShadow,source):null;
+    // Relief, slope and imagery shading all need the same neighbouring DEM
+    // samples even when cast shadows are disabled, or tile edges light apart.
+    const shadeData=color?await paddedShadeHeights(raw,size,z,x,y,overview,controller,analysis?0:smooth,null,castShadow,source):null;
     if(coverage&&!color){
-      const padding=Math.max(4,Math.min(96,Math.round(2**z)));
+      const padding=Math.max(2,Math.round(Math.min(96,Math.max(4,2**z))*size/512));
       const padded=makeMask(size,z,x,y,coverage.withNeighbors(z,x,y),padding),alpha=padded.getContext('2d',{willReadFrequently:true}).getImageData(0,0,size+padding*2,size+padding*2).data;
       const paddedMask=new Uint8Array(alpha.length/4);for(let i=0;i<paddedMask.length;i++)paddedMask[i]=alpha[i*4+3]>=128?1:0;
       heights=softenTerrainEdge(heights,paddedMask,size,padding);
@@ -129,6 +136,7 @@ export async function processTerrainTile(params,controller,chinaOnly,color,regio
       for(let i=0;i<heights.length;i++){const value=Math.max(0,Math.min(16777215,Math.round((heights[i]+32768)*256))),j=i*4;pixels[j]=value>>16;pixels[j+1]=(value>>8)&255;pixels[j+2]=value&255;pixels[j+3]=255}
     }else{
     const strength=Math.max(0,Math.min(1,Number(query.get('strength')||0)/100));
+    const detailed=query.get('style')!=='legacy',exaggeration=Math.max(0,Math.min(80,Number(query.get('exaggeration')??10)||0));
     const time=query.get('time')||'2026-06-21T12:00', gridSize=8, gridWidth=gridSize+1;
     const solar=new Float32Array(gridWidth*gridWidth*3), worldTiles=2**z;
     for(let gy=0;gy<=gridSize;gy++)for(let gx=0;gx<=gridSize;gx++){
@@ -151,6 +159,7 @@ export async function processTerrainTile(params,controller,chinaOnly,color,regio
       const blend=k=>(solar[a+k]*(1-tx)+solar[b+k]*tx)*(1-ty)+(solar[c+k]*(1-tx)+solar[d+k]*tx)*ty;
       const vector=[blend(0),blend(1),blend(2)],day=solarBrightness(vector[2]);
       const shadow=shadows?sampleShadowGrid(shadows,px,py,size):0;
+      const intensity=detailed&&!analysis?terrainLightIntensity(east/28,north/28,vector,exaggeration,day,shadow):null;
       const j=i*4;
       if(analysis){
         const dx=(values[gy0*stride+right]-values[gy0*stride+left])/Math.max(1e-9,metersPerPixel*(right-left));
@@ -160,10 +169,10 @@ export async function processTerrainTile(params,controller,chinaOnly,color,regio
         else if(color==='slope'){const t=Math.min(1,slope/45);pixels[j]=Math.round(55+200*t);pixels[j+1]=Math.round(155-115*t);pixels[j+2]=Math.round(135-105*t);pixels[j+3]=Math.round(Math.min(1,slope/3)*210)}
         else {const angle=(Math.atan2(-dx,-dy)+Math.PI*2)%(Math.PI*2);const hue=angle/(Math.PI*2)*6,k=Math.floor(hue),f=hue-k;const palette=[[240,115,90],[238,203,103],[128,190,128],[80,176,190],[105,127,211],[192,115,190],[240,115,90]];for(let c=0;c<3;c++)pixels[j+c]=Math.round(palette[k][c]*(1-f)+palette[k+1][c]*f);pixels[j+3]=Math.round(Math.min(1,slope/3)*185)}
       }else if(color==='shade'){
-        pixels[j]=0;pixels[j+1]=0;pixels[j+2]=0;
-        pixels[j+3]=Math.round(255*imageryShadowOpacity(day,lightFactor(east,north,vector,1)*(1-0.65*shadow),strength));
+        const shade=detailed?terrainShade(intensity,strength):{color:0,alpha:Math.round(255*imageryShadowOpacity(day,lightFactor(east,north,vector,1)*(1-0.65*shadow),strength))};
+        pixels[j]=pixels[j+1]=pixels[j+2]=shade.color;pixels[j+3]=shade.alpha;
       }else{
-        const factor=(0.18+0.82*day)*lightFactor(east,north,vector,strength)*(1-0.65*shadow*strength*day);
+        const factor=detailed?1+strength*(intensity-1):(0.18+0.82*day)*lightFactor(east,north,vector,strength)*(1-0.65*shadow*strength*day);
         const colorValue=elevationColor(heights[i]);
         pixels[j]=Math.min(255,colorValue[0]*factor);pixels[j+1]=Math.min(255,colorValue[1]*factor);pixels[j+2]=Math.min(255,colorValue[2]*factor*(1+0.20*(1-day)));
       }
