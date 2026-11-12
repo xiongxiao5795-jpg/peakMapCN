@@ -53,7 +53,7 @@ const labelOrders=[
   {province:75,admin_city:140,district:55},
   {province:60,admin_city:85,district:140}
 ].map(priorities=>[...labelsByImportance].sort((a,b)=>(priorities[b.category]??b.importance)-(priorities[a.category]??a.importance)));
-const labelsForZoom=zoom=>labelOrders[zoom<5.3?0:zoom<8.5?1:2];
+const labelsForZoom=zoom=>labelOrders[zoom<5.3?0:zoom<7.5?1:2];
 const icons = { Search, Mountain, Layers2, Compass, Plus, Minus, RotateCcw, LocateFixed, ChevronDown, ArrowUpRight, X, Info, Menu, MapPin, MousePointer2 };
 document.querySelector('#app').innerHTML = `
 <header class="topbar"><a class="brand" href="#" aria-label="山河志首页"><span class="brand-mark"><i data-lucide="mountain"></i></span><span><b>山河志</b><small>SHAN HE ZHI</small></span></a><span class="top-divider"></span><span class="top-title">中国自然地理图鉴 <em> / </em> 地形探索</span></header>

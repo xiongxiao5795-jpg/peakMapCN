@@ -3,7 +3,7 @@ import { loadLocalAdministrativeBoundaries, loadLocalDistrictBoundaries } from '
 
 export function districtDisplayZoom(scope){
   const code=String(scope?.properties?.adcode||'');
-  return /^\d{6}$/.test(code)&&code.slice(2)!=='0000'?6:8.5;
+  return /^\d{6}$/.test(code)&&code.slice(2)!=='0000'?6:7.5;
 }
 
 // Only load visible parent divisions; cache responses and never alter the camera or terrain source.

@@ -31,8 +31,8 @@
 @media(max-width:650px){.map-area:has(.explorer-drawer:not([hidden])) #map .center-scale{bottom:calc(min(76%, 650px) + 10px)}}
 .detail-card h3,.detail-card .detail-tag{cursor:grab;touch-action:none}.detail-card h3:active{cursor:grabbing}.detail-clear{border:1px solid #748a75;background:#263c2e;color:#e8efdf;border-radius:4px;padding:4px 7px;font-size:10px;margin-top:7px}
 .overview-box{position:relative}.overview-head strong{cursor:grab;touch-action:none;user-select:none}.overview-head strong:active{cursor:grabbing}
-.overview-box #overview-map{width:100%;height:135px}.overview-box #overview-resize{position:absolute;right:2px;bottom:1px;width:24px;height:24px;padding:0;border:0;background:transparent;color:#526d59;font-size:18px;cursor:nwse-resize;touch-action:none}
-.overview-box small{padding-right:20px}
+.overview-box #overview-map{width:100%;height:135px}.overview-box #overview-resize{position:absolute;right:2px;top:2px;width:24px;height:24px;padding:0;border:0;background:transparent;color:#526d59;font-size:18px;cursor:nesw-resize;touch-action:none}
+.overview-head{padding-right:24px}
 @media(max-width:650px){.overview-box #overview-map{height:140px}}
 .explorer-drawer .switch-row input[type=checkbox]{z-index:1;cursor:pointer}
 .overview-box{max-width:calc(100vw - 12px)}

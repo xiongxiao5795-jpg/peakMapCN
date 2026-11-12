@@ -33,7 +33,7 @@ export function sharedLoadedDemZoom(tiles,manager,source,deltaZoom=1){
 // Until the requested level is complete, use the highest common loaded
 // parent for the whole view, then switch together. Until any common level is
 // ready, keep the whole surface flat instead of exposing partial tall walls.
-export function configureCoherentTerrain(map){
+export function configureCoherentTerrain(map,{coarsePointer=globalThis.matchMedia?.('(pointer: coarse)').matches===true||/Android/i.test(globalThis.navigator?.userAgent||''),now=()=>performance.now(),setTimer=setTimeout,clearTimer=clearTimeout}={}){
   const terrain=map.terrain,manager=terrain?.tileManager;
   if(!manager||manager.__peakCoherent)return;
   if(typeof manager.update!=='function'||typeof manager.getSourceTile!=='function'||typeof manager.findTileInCaches!=='function')return;
@@ -43,7 +43,7 @@ export function configureCoherentTerrain(map){
   const transitionProgress=()=>{
     const t=manager.__peakTransition;
     if(!t)return 1;
-    return terrainBlendProgress(t.started,performance.now(),duration);
+    return terrainBlendProgress(t.started,now(),duration);
   };
   // The previous texture is looked up separately for each terrain tile. When
   // that tile wasn't present before the pan, it uses the new texture directly.
@@ -77,23 +77,48 @@ export function configureCoherentTerrain(map){
   // Avoid repeatedly promoting the entire terrain while the camera is being
   // dragged. Resume refinement shortly after movement ends; a necessary
   // downgrade still happens immediately to avoid mixing incompatible DEMs.
-  let settleUntil=0,settleTimer;
+  let settleUntil=0,settleTimer,refinementStarted=null,refinementChanged=null,refinementCandidate=null,refinementTimer=null;
+  function wakeForRefinement(delay){
+    if(refinementTimer!==null)return;
+    refinementTimer=setTimer(()=>{refinementTimer=null;if(map.terrain?.tileManager===manager)map.triggerRepaint?.()},Math.max(1,delay));
+  }
   map.on?.('moveend',()=>{
     if(map.terrain?.tileManager!==manager)return;
-    settleUntil=performance.now()+500;clearTimeout(settleTimer);
-    settleTimer=setTimeout(()=>{if(map.terrain?.tileManager===manager)map.triggerRepaint?.()},510);
+    settleUntil=now()+500;clearTimer(settleTimer);
+    settleTimer=setTimer(()=>{if(map.terrain?.tileManager===manager)map.triggerRepaint?.()},510);
   });
   manager.update=function(...args){
     const changed=update(...args),source=this.tileManager._source;
-    const tiles=this.getRenderableTiles();let level=sharedLoadedDemZoom(tiles,this,source,this.deltaZoom);
+    const tiles=this.getRenderableTiles(),visible=visibleDemTiles(tiles,source,this.deltaZoom),ideal=visible.length?Math.min(...visible.map(item=>item.ideal)):null;
+    let target=ideal;
+    if(coarsePointer&&ideal!==null&&typeof source.calculateTileZoom==='function'&&typeof map.getZoom==='function'){
+      const scale=Math.log2((map.transform?.tileSize||512)/(this.tileManager.tileSize||512));
+      const requested=Math.floor(source.calculateTileZoom(map.getZoom()+scale,1,1,1));
+      if(Number.isFinite(requested))target=Math.max(ideal,Math.min(source.maxzoom??22,requested));
+    }
+    let level=sharedLoadedDemZoom(tiles,this,source,this.deltaZoom);
     // A newly entering tile must not turn the whole existing view flat while
     // its DEM is loading. Tiles with no data remain empty until ready.
     if(level===null&&this.__peakSharedZoom!==null)level=this.__peakSharedZoom;
-    if(level!==null&&this.__peakSharedZoom!==null&&level>this.__peakSharedZoom&&(map.isMoving?.()||performance.now()<settleUntil)&&isDemLevelLoaded(visibleDemTiles(tiles,source,this.deltaZoom),this,this.__peakSharedZoom))level=this.__peakSharedZoom;
+    const previous=this.__peakSharedZoom,canKeep=previous!==null&&ideal!==null&&previous<=ideal&&isDemLevelLoaded(visible,this,previous);
+    if(canKeep&&level!==previous&&this.__peakTransition&&transitionProgress()<1)level=previous;
+    if(canKeep&&level>previous&&(map.isMoving?.()||now()<settleUntil))level=previous;
+    // A newly resolved parent can briefly appear to be the target while the
+    // terrain renderer is still discovering the next level. Require a quiet
+    // interval on touch devices, and wait longer if finer tiles are pending.
+    if(coarsePointer&&canKeep&&level>previous){
+      const time=now();refinementStarted??=time;
+      if(refinementCandidate!==level){refinementCandidate=level;refinementChanged=time}
+      const deadline=10000-(time-refinementStarted),quiet=1400-(time-refinementChanged);
+      const failed=typeof this.isStillWaitingForDEM==='function'&&visible.some(({id,ideal})=>!this.isStillWaitingForDEM(id)&&!this.findTileInCaches(id.scaledTo(Math.min(target,ideal)).key)?.dem);
+      const remaining=Math.min(deadline,level<target&&!failed?deadline:quiet);
+      if(remaining>0){level=previous;wakeForRefinement(remaining)}
+    }
     const levelChanged=level!==this.__peakSharedZoom;
     if(levelChanged){
-      const from=this.__peakSharedZoom;this.__peakSharedZoom=level;this._lastTilesetChange=performance.now();
-      this.__peakTransition=from!==null&&level!==null?{from,started:performance.now()}:null;
+      const from=this.__peakSharedZoom;this.__peakSharedZoom=level;this._lastTilesetChange=now();refinementStarted=null;refinementChanged=null;refinementCandidate=null;
+      if(refinementTimer!==null){clearTimer(refinementTimer);refinementTimer=null}
+      this.__peakTransition=from!==null&&level!==null?{from,started:now()}:null;
     }
     if(this.__peakTransition){if(transitionProgress()>=1)this.__peakTransition=null;else map.triggerRepaint?.()}
     return changed||levelChanged;
