@@ -17,6 +17,15 @@ export function uniformImageryZoom(zoom,bounds,budget=192){
   return level;
 }
 
+// Ignore the empty area surrounding an isolated region when limiting tile
+// requests. The unfiltered camera bounds grow dramatically at high pitch.
+export function terrainBudgetBounds(bounds,region){
+  if(!region)return bounds;
+  const [[w,s],[e,n]]=bounds,[rw,rs,re,rn]=region;
+  const clipped=[[Math.max(w,rw),Math.max(s,rs)],[Math.min(e,re),Math.min(n,rn)]];
+  return clipped[0][0]<=clipped[1][0]&&clipped[0][1]<=clipped[1][1]?clipped:[[rw,rs],[re,rn]];
+}
+
 export function configureTerrainLod(map){
   const source=map.getSource('dem');
   if(!source)return;
@@ -31,8 +40,8 @@ export function configureTerrainLod(map){
     const candidate=stableTerrainTileZoom(zoom,distance,vertical,center,true)+bias+detail;
     if(!['getBounds','getCenter','getContainer','getZoom','getPitch','getBearing'].every(name=>typeof map[name]==='function'))return candidate;
     const position=map.getCenter(),container=map.getContainer();
-    const key=[candidate,position.lng,position.lat,map.getZoom(),map.getPitch(),map.getBearing(),container.clientWidth,container.clientHeight].join(',');
-    if(key!==terrainKey){terrainKey=key;terrainLimit=uniformImageryZoom(candidate,map.getBounds().toArray(),budget)+0.999999}
+    const key=[candidate,position.lng,position.lat,map.getZoom(),map.getPitch(),map.getBearing(),container.clientWidth,container.clientHeight,...(map.__peakmapRegionBounds||[])].join(',');
+    if(key!==terrainKey){terrainKey=key;terrainLimit=uniformImageryZoom(candidate,terrainBudgetBounds(map.getBounds().toArray(),map.__peakmapRegionBounds),budget)+0.999999}
     return Math.min(candidate,terrainLimit);
   };
   const imagery=map.getSource('satellite');
@@ -42,8 +51,8 @@ export function configureTerrainLod(map){
     imagery.roundZoom=false;
     imagery.calculateTileZoom=zoom=>{
       const center=map.getCenter(),container=map.getContainer();
-      const next=[zoom,center.lng,center.lat,map.getPitch(),map.getBearing(),container.clientWidth,container.clientHeight].join(',');
-      if(next!==key){key=next;level=uniformImageryZoom(zoom,map.getBounds().toArray(),budget)}
+      const next=[zoom,center.lng,center.lat,map.getPitch(),map.getBearing(),container.clientWidth,container.clientHeight,...(map.__peakmapRegionBounds||[])].join(',');
+      if(next!==key){key=next;level=uniformImageryZoom(zoom,terrainBudgetBounds(map.getBounds().toArray(),map.__peakmapRegionBounds),budget)}
       return level;
     };
   }
@@ -60,12 +69,11 @@ export function configureTerrainLod(map){
   }
 }
 
-// MapLibre defaults to 128 subdivisions per tile. A denser mesh makes the
-// DEM's actual ridges less faceted; it cannot invent missing DEM resolution.
-// Both values stay below the 16-bit mesh-index limit, including skirts.
+// Keep desktop terrain meshes bounded: distant tiles at high pitch can cover
+// dozens of tiles, and the denser mesh was causing multi-second render stalls.
 export function configureTerrainMesh(map,coarsePointer=globalThis.matchMedia?.('(pointer: coarse)').matches===true){
   const terrain=map.terrain;if(!terrain||typeof terrain.meshSize!=='number')return;
-  const size=coarsePointer?160:192;if(terrain.meshSize===size)return;
+  const size=coarsePointer?160:128;if(terrain.meshSize===size)return;
   for(const mesh of Object.values(terrain._meshCache||{}))mesh.destroy();
   terrain._meshCache={};terrain.meshSize=size;terrain.tileManager?.releaseAllRTT?.();map.triggerRepaint?.();
 }
@@ -81,12 +89,12 @@ export function limitTerrainSkirts(map){
   terrain.__peakmapSkirtsLimited=true;
 }
 
-// The stable mesh can keep more tiles in view at high pitch. On touch devices,
-// use a smaller render-to-texture target to bound GPU memory; DEM precision is
-// unaffected. MapLibre recreates both objects whenever terrain is reset.
-export function configureMobileTerrainTextures(map,coarsePointer=globalThis.matchMedia?.('(pointer: coarse)').matches===true){
+// At low angles the full view can include dozens of terrain tiles. Rendering
+// each at double width and height multiplies GPU memory and fill work by four.
+// This changes texture resolution, not the underlying elevation precision.
+export function configureTerrainTextures(map){
   const terrain=map.terrain,target=map.painter?.renderToTexture;
-  if(!coarsePointer||!terrain||!target)return;
+  if(!terrain||!target)return;
   const size=terrain.tileManager.tileSize;
   if(target.rttSize===size)return;
   terrain.tileManager.releaseAllRTT();

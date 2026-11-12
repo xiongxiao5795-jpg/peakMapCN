@@ -19,6 +19,12 @@ test('范围外瓦片不阻止区域内地形升级',()=>{
   assert.equal(sharedLoadedDemZoom(tiles,manager,source,1),7);
 });
 
+test('选区周边用于接边的瓦片未加载时不阻塞选区内部升级',()=>{
+  const tiles=[{tileID:id(8,40,40)},{tileID:id(8,42,40)}],loaded=new Map([['7/20/20',{dem:{}}]]);
+  const source={minzoom:0,maxzoom:12,hasTile:()=>true,__peakmapRegionCoreTile:tile=>tile.key==='7/20/20'},manager={findTileInCaches:key=>loaded.get(key)};
+  assert.equal(sharedLoadedDemZoom(tiles,manager,source,1),7);
+});
+
 test('渲染与地面采样共同使用完整父级并在加载完成后切换',()=>{
   const tiles=[{tileID:id(8,40,40)},{tileID:id(8,42,40)}],parent={dem:{},tileID:id(6,10,10)},first={dem:{},tileID:id(7,20,20)},second={dem:{},tileID:id(7,21,20)};
   const loaded=new Map([[parent.tileID.key,parent],[first.tileID.key,first]]),source={minzoom:0,maxzoom:12,hasTile:()=>true};
@@ -26,7 +32,20 @@ test('渲染与地面采样共同使用完整父级并在加载完成后切换',
   const map={terrain:{tileManager:manager}};configureCoherentTerrain(map);assert.equal(manager.update(),true);
   assert.equal(manager.getSourceTile(tiles[0].tileID,true),parent);assert.equal(manager.getSourceTile(tiles[1].tileID,true),parent);
   loaded.set(second.tileID.key,second);assert.equal(manager.update(),true);assert.equal(manager.getSourceTile(tiles[0].tileID,true),first);assert.equal(manager.getSourceTile(tiles[1].tileID,true),second);
-  loaded.delete(second.tileID.key);assert.equal(manager.getSourceTile(tiles[1].tileID,true),undefined);
+  loaded.delete(second.tileID.key);assert.equal(manager.getSourceTile(tiles[1].tileID,true),parent);
+});
+
+test('新瓦片未就绪时不降低现有山峰层级，并平滑补充局部细节',()=>{
+  const tiles=[{tileID:id(8,40,40)},{tileID:id(8,42,40)}],parent={dem:{},tileID:id(6,10,10)},first={dem:{},tileID:id(7,20,20)},second={dem:{},tileID:id(7,21,20)};
+  const loaded=new Map([[parent.tileID.key,parent],[first.tileID.key,first],[second.tileID.key,second]]),source={minzoom:0,maxzoom:12,hasTile:()=>true};let time=1000;
+  const manager={deltaZoom:1,tileManager:{_source:source},update:()=>false,getRenderableTiles:()=>tiles,findTileInCaches:key=>loaded.get(key),getSourceTile:()=>undefined};
+  const coverage={getSampler:id=>{const value=manager.getSourceTile(id,true)===parent?100:200;return ()=>value},_createElevationSampler(id){const value=manager.getSourceTile(id,true)===parent?100:200;return ()=>value}};
+  const terrain={tileManager:manager,coverage,getTerrainData:id=>({tile:manager.getSourceTile(id,true)})};configureCoherentTerrain({terrain},{now:()=>time});manager.update();
+  loaded.delete(second.tileID.key);manager.update();assert.equal(manager.__peakSharedZoom,7);assert.equal(manager.getSourceTile(tiles[0].tileID,true),first);assert.equal(manager.getSourceTile(tiles[1].tileID,true),parent);
+  loaded.set(second.tileID.key,second);manager.update();let data=terrain.getTerrainData(tiles[1].tileID),sample=coverage.getSampler(tiles[1].tileID);
+  assert.equal(data.tile,second);assert.equal(data.__peakPrevious.tile,parent);assert.equal(data.__peakMix,0);assert.equal(sample(0,0,1),100);
+  time+=325;data=terrain.getTerrainData(tiles[1].tileID);assert.equal(data.__peakMix,0.5);assert.equal(sample(0,0,1),150);
+  time+=325;manager.update();assert.equal(terrain.getTerrainData(tiles[1].tileID).__peakPrevious,undefined);assert.equal(sample(0,0,1),200);
 });
 
 test('没有完整共同层级时不提前展示局部高地形',()=>{

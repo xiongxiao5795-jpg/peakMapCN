@@ -5,12 +5,13 @@ import { tileTemplate, getTerrainSource } from './terrain.js';
 import { geometryBounds, boundsOverlap } from './admin.js';
 import { setupRoadOverlay } from './road-overlay.js';
 import { setupCenterScale } from './center-scale.js';
-import { configureTerrainLod, configureMobileTerrainTextures, limitTerrainSkirts, configureTerrainMesh } from './terrain-lod.js';
+import { configureTerrainLod, configureTerrainTextures, limitTerrainSkirts, configureTerrainMesh } from './terrain-lod.js';
 import { terrainSourceMaxZoom, setTerrainSourceMaxZoom } from './terrain-source-level.js';
 import { processTerrainTile } from './terrain-processing.js';
 import { fitOverviewWithFocus } from './overview-viewport.js';
 import { overviewAdministrativeLevel } from './overview-administration.js';
 import { configureCoherentTerrain } from './terrain-coherence.js';
+import { bindShadeReadiness } from './shade-readiness.js';
 import booleanPointInPolygon from '@turf/boolean-point-in-polygon';
 import { loadLocalAdministrativeBoundaries, loadLocalDistrictBoundaries } from './admin-boundaries.js';
 
@@ -28,12 +29,13 @@ const bookmarkKey='peakmap-bookmarks-v1';
 function getBookmarks(){try{const v=JSON.parse(localStorage.getItem(bookmarkKey)||'[]');return Array.isArray(v)?v:[]}catch{return []}}
 function saveBookmarks(list){try{localStorage.setItem(bookmarkKey,JSON.stringify(list));return true}catch{return false}}
 function captureThumbnail(map){try{const canvas=document.createElement('canvas');canvas.width=144;canvas.height=80;canvas.getContext('2d').drawImage(map.getCanvas(),0,0,144,80);return canvas.toDataURL('image/jpeg',0.55)}catch{return null}}
-function stateFor(map){return {center:map.getCenter().toArray(),zoom:map.getZoom(),bearing:map.getBearing(),pitch:map.getPitch(),base:$('#base-map').value,source:getTerrainSource(),mode:$('#terrain-mode').value,exaggeration:Number($('#exaggeration').value),style:$('#visual-style').value,lightingStyle:$('#terrain-lighting-style').value,time:$('#sun-time').value,light:Number($('#light-strength').value),shadow:$('#terrain-shadows').checked,softness:Number($('#terrain-softness').value),fog:Number($('#fog-strength').value),selected:map.__getExplorerSelection?.()||null,isolate:$('#isolate-toggle').checked,contours:$('#contours-toggle')?.checked||false,analysis:$('#analysis-mode')?.value||'none',blend:Number($('#terrain-blend')?.value||0)};}
+function stateFor(map){return {center:map.getCenter().toArray(),zoom:map.getZoom(),bearing:map.getBearing(),pitch:map.getPitch(),base:$('#base-map').value,source:getTerrainSource(),mode:$('#terrain-mode').value,exaggeration:Number($('#exaggeration').value),style:$('#visual-style').value,lightingStyle:$('#terrain-lighting-style').value,lightingEnabled:$('#lighting-enabled').checked,time:$('#sun-time').value,light:Number($('#light-strength').value),shadow:$('#terrain-shadows').checked,softness:Number($('#terrain-softness').value),fog:Number($('#fog-strength').value),selected:map.__getExplorerSelection?.()||null,isolate:$('#isolate-toggle').checked,contours:$('#contours-toggle')?.checked||false,analysis:$('#analysis-mode')?.value||'none',blend:Number($('#terrain-blend')?.value||0)};}
 function setValue(id,value,event='change'){const el=$(`#${id}`);if(value==null||!el)return;if(el.tagName==='SELECT'&&![...el.options].some(o=>o.value===String(value)))return;el.value=value;el.dispatchEvent(new Event(event,{bubbles:true}));}
 function restore(map,state){
   if(!state||!Array.isArray(state.center)||state.center.length!==2||!state.center.every(Number.isFinite)||Math.abs(state.center[0])>180||Math.abs(state.center[1])>85)return false;
   for(const [id,value,event] of [['base-map',state.base],['terrain-source',state.source],['exaggeration',state.exaggeration,'input'],['terrain-mode',state.mode==='flat'?'flat':'3d'],['visual-style',state.style],['terrain-lighting-style',state.lightingStyle],['terrain-softness',state.softness,'input'],['fog-strength',state.fog,'input'],['sun-time',state.time,'input'],['light-strength',state.light,'input']])setValue(id,value,event);
   const clamp=(n,min,max,fallback)=>Number.isFinite(n)?Math.max(min,Math.min(max,n)):fallback;
+  if(typeof state.lightingEnabled==='boolean'){$('#lighting-enabled').checked=state.lightingEnabled;$('#lighting-enabled').dispatchEvent(new Event('change'))}
   if(typeof state.shadow==='boolean'){$('#terrain-shadows').checked=state.shadow;$('#terrain-shadows').dispatchEvent(new Event('change'))}
   if(state.selected)map.__selectExplorerPlace?.(state.selected);
   if(typeof state.isolate==='boolean'){$('#isolate-toggle').checked=state.isolate;$('#isolate-toggle').dispatchEvent(new Event('change'))}
@@ -209,14 +211,15 @@ export function setupExplorer({map,maplibregl,adminAreas,notify,initialView,getS
     compare=new maplibregl.Map({container:'compare-map',attributionControl:false,center:map.getCenter(),zoom:map.getZoom(),bearing:map.getBearing(),pitch:map.getPitch(),minZoom:1,maxZoom:14,maxPitch:$('#terrain-mode').value==='flat'?0:75,style});
     compare.__peakmapRegionIsolated=!!map.__peakmapRegionIsolated;compare.__peakSource=other;compare.__peakTerrainSource=other;
     if(import.meta.env.DEV)window.__peakCompare=compare;copyCompareLabels();
-    compare.on('terrain',()=>{configureTerrainMesh(compare);configureCoherentTerrain(compare);limitTerrainSkirts(compare);configureMobileTerrainTextures(compare)});
-    compare.on('load',()=>{configureTerrainLod(compare);configureTerrainMesh(compare);configureCoherentTerrain(compare);limitTerrainSkirts(compare);configureMobileTerrainTextures(compare);setupRoadOverlay(compare,{enabled:()=>$('#roads-toggle').checked,exaggeration:()=>Number($('#exaggeration').value),allowed:roadAllowed});syncCompare()});compare.on('move',syncFromCompare);compare.on('error',event=>{if(event.error?.name!=='AbortError'&&!compareBox.dataset.failed){compareBox.dataset.failed='1';notify(`${sourceName(other)} 对比数据加载失败，请检查网络`)}});
+    compare.on('terrain',()=>{configureTerrainMesh(compare);configureCoherentTerrain(compare);limitTerrainSkirts(compare);configureTerrainTextures(compare)});
+    compare.on('load',()=>{bindShadeReadiness(compare);configureTerrainLod(compare);configureTerrainMesh(compare);configureCoherentTerrain(compare);limitTerrainSkirts(compare);configureTerrainTextures(compare);setupRoadOverlay(compare,{enabled:()=>$('#roads-toggle').checked,exaggeration:()=>Number($('#exaggeration').value),allowed:roadAllowed});syncCompare()});compare.on('move',syncFromCompare);compare.on('error',event=>{if(event.error?.name!=='AbortError'&&!compareBox.dataset.failed){compareBox.dataset.failed='1';notify(`${sourceName(other)} 对比数据加载失败，请检查网络`)}});
   }
   $('#compare-toggle').onchange=e=>{if(e.target.checked){delete compareBox.dataset.failed;openCompare()}else closeCompare()};
   map.on('move',syncCompare);$('#exaggeration').addEventListener('input',syncCompare);
   map.on('peak:terrain-source',()=>{if($('#compare-toggle').checked)openCompare()});
   map.on('peak:terrain-mode',()=>{if($('#compare-toggle').checked)openCompare()});
   map.on('peak:scope-change',()=>{if($('#compare-toggle').checked)openCompare()});
+  map.on('peak:lighting-enabled',event=>{if(!compare)return;for(const id of ['satellite-shade','terrain-hillshade'])if(compare.getLayer(id))compare.setLayoutProperty(id,'visibility',event.enabled&&$('#base-map').value==='satellite'?'visible':'none')});
   map.on('peak:lighting',event=>{if(!compare)return;const china=$('#china-only').checked;for(const [id,type] of [['relief','relief'],['satellite-shade','shade']])compare.getSource(id)?.setTiles([tileTemplate(type,china,event.lighting,compare.__peakSource)])});
   for(const id of ['base-map','china-only','roads-toggle','rail-toggle','water-toggle','admin-toggle'])$(`#${id}`).addEventListener('change',()=>{if($('#compare-toggle').checked)setTimeout(openCompare,0)});
   map.addSource('wayback',{type:'raster',tiles:['https://wayback.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/WMTS/1.0.0/default028mm/MapServer/tile/10/{z}/{y}/{x}'],tileSize:256,maxzoom:19});
@@ -247,7 +250,7 @@ export function setupExplorer({map,maplibregl,adminAreas,notify,initialView,getS
   function blend(){const value=Number($('#terrain-blend').value)/100;$('#terrain-blend-value').value=`${Math.round(value*100)}%`;if($('#base-map').value==='satellite'){map.setLayoutProperty('relief','visibility',value?'visible':'none');map.moveLayer('relief','satellite-shade');map.setPaintProperty('relief','raster-opacity',value)}else map.setPaintProperty('relief','raster-opacity',1)}
   $('#terrain-blend').oninput=blend;$('#base-map').addEventListener('change',()=>setTimeout(blend,0));$('#terrain-detail').addEventListener('change',()=>setTimeout(blend,0));
   $('#relief-palette').onchange=e=>{const config={natural:[0,0,0],sand:[-20,-.25,.07],ink:[0,-1,.12],high:[10,-.45,.17]}[e.target.value];map.setPaintProperty('relief','raster-hue-rotate',config[0]);map.setPaintProperty('relief','raster-saturation',config[1]);map.setPaintProperty('relief','raster-brightness-min',config[2]);};
-  $('#clear-relief-light').onclick=()=>{const date=$('#sun-time').value.slice(0,10);setValue('sun-time',`${date}T10:00`,'input');setValue('light-strength',85,'input');notify('已切换到上午 10:00 的光照；时间可在上方继续调整')};
+  $('#clear-relief-light').onclick=()=>{if(!$('#lighting-enabled').checked){$('#lighting-enabled').checked=true;$('#lighting-enabled').dispatchEvent(new Event('change'))}const date=$('#sun-time').value.slice(0,10);setValue('sun-time',`${date}T10:00`,'input');setValue('light-strength',85,'input');notify('已切换到上午 10:00 的光照；时间可在上方继续调整')};
   map.addSource('explorer-profile',{type:'geojson',data:empty});map.addLayer({id:'explorer-profile-line',type:'line',source:'explorer-profile',paint:{'line-color':'#e0a42f','line-width':3}},'outside-china-mask');
   let profileMarker=null;
   let tool=null,first=null,revision=0;

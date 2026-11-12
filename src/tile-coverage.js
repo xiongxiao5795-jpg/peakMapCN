@@ -15,7 +15,7 @@ export function createTileCoverage(features){
       return {coordinates,bounds,feature:polygon(coordinates)};
     });
   });
-  const cache=new Map();
+  const cache=new Map(),boundsCache=new Map();
   const tileBounds=(z,x,y)=>{const n=2**z;return [x/n*360-180,tileLat(y+1,n),(x+1)/n*360-180,tileLat(y,n)]};
   const coverage=(z,x,y)=>{
     const key=`${z}/${x}/${y}`;
@@ -25,7 +25,11 @@ export function createTileCoverage(features){
     const found=parts.filter(part=>overlaps(bounds,part.bounds)&&booleanIntersects(part.feature,tile));
     if(cache.size>=512)cache.clear();cache.set(key,found);return found;
   };
-  coverage.mayIntersect=(z,x,y)=>{const bounds=tileBounds(z,x,y);return parts.some(part=>overlaps(bounds,part.bounds))};
+  coverage.mayIntersect=(z,x,y)=>{
+    const key=`${z}/${x}/${y}`;if(boundsCache.has(key))return boundsCache.get(key);
+    const bounds=tileBounds(z,x,y),result=parts.some(part=>overlaps(bounds,part.bounds));
+    if(boundsCache.size>=4096)boundsCache.clear();boundsCache.set(key,result);return result;
+  };
   // Include polygon components just outside the tile when building padded
   // masks. Otherwise adjacent tiles can disagree about the very same edge.
   coverage.withNeighbors=(z,x,y,radius=1)=>{

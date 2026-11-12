@@ -55,10 +55,26 @@ test('选区保留相邻高程瓦片供地形接边，显示图层仍按选区�
   const z=10,[,x,y]=tile(100,25,z),neighbor={canonical:{z,x:x-1,y}};
   configureScopedTileFilter(map,region);
   assert.equal(dem.hasTile(neighbor),true);
+  assert.equal(dem.__peakmapRegionCoreTile(neighbor),false);
+  assert.equal(dem.__peakmapRegionCoreTile({canonical:{z,x,y}}),true);
   assert.equal(imagery.hasTile(neighbor),false);
   assert.equal(analysis.hasTile(neighbor),false);
   assert.equal(dem.hasTile({canonical:{z,x:x-2,y}}),false);
   configureScopedTileFilter(map,null);
+  assert.equal(dem.__peakmapRegionCoreTile,null);
   assert.equal(imagery.hasTile(neighbor),true);
   assert.equal(analysis.hasTile(neighbor),true);
+});
+
+test('中国范围的远处空瓦片不阻塞地形，切到全世界后恢复',()=>{
+  const dem={hasTile:()=>true},imagery={hasTile:()=>true},map={getSource:id=>({dem,satellite:imagery})[id]};
+  const id=(lon,lat,z)=>{const [level,x,y]=tile(lon,lat,z);return {canonical:{z:level,x,y}}};
+  configureScopedTileFilter(map,null,{chinaOnly:true,chinaFeatures:[region]});
+  assert.equal(dem.hasTile(id(105,25,10)),true);
+  assert.equal(dem.hasTile(id(10,25,10)),false);
+  assert.equal(dem.__peakmapRegionCoreTile(id(10,25,10)),false);
+  assert.equal(imagery.hasTile(id(10,25,10)),true);
+  configureScopedTileFilter(map,null,{chinaOnly:false,chinaFeatures:[region]});
+  assert.equal(dem.hasTile(id(10,25,10)),true);
+  assert.equal(dem.__peakmapRegionCoreTile,null);
 });

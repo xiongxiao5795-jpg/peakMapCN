@@ -7,7 +7,6 @@ import { loadTerrainBitmap, hasOverviewTile } from './terrain-data.js';
 import { terrainMetrics } from './terrain-metrics.js';
 import { buildShadowGrid, sampleShadowGrid } from './terrain-shadows.js';
 import { smoothTerrainHeights } from './terrain-smoothing.js';
-import { softenTerrainEdge } from './terrain-edge.js';
 import { repairTerrainStripes } from './terrain-integrity.js';
 import { repairAwsTerrain } from './terrain-integrity-browser.js';
 
@@ -93,12 +92,24 @@ export async function processImageryTile(params,controller,chinaOnly,region=null
 }
 export async function processTerrainTile(params,controller,chinaOnly,color,region=null){
   const match=params.url.match(/\/(\d+)\/(\d+)\/(\d+)\.webp/);if(!match)throw new Error('Invalid terrain tile URL');
-  const [,zs,xs,ys]=match, z=+zs,x=+xs,y=+ys, coverage=coverageFor(region)||(chinaOnly?tilePolygons:null),parts=coverage?coverage(z,x,y):null;
+  const [,zs,xs,ys]=match, z=+zs,x=+xs,y=+ys;
+  // A geographic cut-out changes visible layers, never the DEM itself.
+  // Fading DEM to sea level at a boundary alters mountain heights at each
+  // zoom and makes panning over a wide view both unstable and expensive.
+  const areaCoverage=coverageFor(region)||(chinaOnly?tilePolygons:null),coverage=color?areaCoverage:null,parts=coverage?coverage(z,x,y):null;
   const query=new URLSearchParams(params.url.split('?')[1]||''),source=query.get('source')==='aws'?'aws':'mapterhorn';
   // Preserve the source's own DEM grid: enlarging 256 encoded RGB pixels to
   // 512 creates no new elevation information. Shade gets a finer 256px grid.
   const size=color==='shade'||source==='aws'?256:512;
-  // Never request a remote elevation tile that does not intersect a land polygon.
+  // Keep one neighbouring DEM tile around the selected area for stitching,
+  // and avoid requesting distant tiles outside it.
+  if(!color&&areaCoverage){
+    const n=2**z;let near=false;
+    for(let dy=-1;dy<=1&&!near;dy++)for(let dx=-1;dx<=1;dx++){
+      const ny=y+dy;if(ny>=0&&ny<n&&areaCoverage.mayIntersect(z,(x+dx+n)%n,ny)){near=true;break}
+    }
+    if(!near)return emptyTile(size,true);
+  }
   if(coverage&&!parts.length)return emptyTile(size,!color);
   const canvas=makeCanvas(size),ctx=canvas.getContext('2d',{willReadFrequently:true});
   if(!color){ctx.fillStyle='rgb(128,0,0)';ctx.fillRect(0,0,size,size)}
@@ -112,7 +123,7 @@ export async function processTerrainTile(params,controller,chinaOnly,color,regio
   if(source==='aws'&&z>=12)await repairAwsTerrain(rawctx,size,z,x,y,overview,controller.signal);
   const smooth=Math.max(0,Math.min(100,Number(query.get('smooth'))||0));
   const landMask=coverage?makeMask(size,z,x,y,parts):null;
-  if(color||smooth||coverage){
+  if(color||smooth){
     const image=rawctx.getImageData(0,0,size,size), pixels=image.data, original=new Float32Array(size*size);
     for(let i=0;i<original.length;i++){const j=i*4;original[i]=pixels[j+3]<128?0:pixels[j]*256+pixels[j+1]+pixels[j+2]/256-32768}
     let mask=null;
@@ -122,18 +133,14 @@ export async function processTerrainTile(params,controller,chinaOnly,color,regio
       mask=new Uint8Array(size*size);for(let i=0;i<mask.length;i++)mask[i]=alpha[i*4+3]>=128?1:0;
     }
     let heights=smoothTerrainHeights(original,size,size,smooth,mask);
-    const analysis=color==='slope'||color==='aspect'||color==='multi',castShadow=!analysis&&!!color&&query.get('shadow')!=='0';
+    const analysis=color==='slope'||color==='aspect'||color==='multi',unlit=color===true&&query.get('enabled')==='0',castShadow=!analysis&&!unlit&&!!color&&query.get('shadow')!=='0';
     // Relief, slope and imagery shading all need the same neighbouring DEM
     // samples even when cast shadows are disabled, or tile edges light apart.
-    const shadeData=color?await paddedShadeHeights(raw,size,z,x,y,overview,controller,analysis?0:smooth,null,castShadow,source):null;
-    if(coverage&&!color){
-      const padding=Math.max(2,Math.round(Math.min(96,Math.max(4,2**z))*size/512));
-      const padded=makeMask(size,z,x,y,coverage.withNeighbors(z,x,y),padding),alpha=padded.getContext('2d',{willReadFrequently:true}).getImageData(0,0,size+padding*2,size+padding*2).data;
-      const paddedMask=new Uint8Array(alpha.length/4);for(let i=0;i<paddedMask.length;i++)paddedMask[i]=alpha[i*4+3]>=128?1:0;
-      heights=softenTerrainEdge(heights,paddedMask,size,padding);
-    }
+    const shadeData=color&&!unlit?await paddedShadeHeights(raw,size,z,x,y,overview,controller,analysis?0:smooth,null,castShadow,source):null;
     if(!color){
       for(let i=0;i<heights.length;i++){const value=Math.max(0,Math.min(16777215,Math.round((heights[i]+32768)*256))),j=i*4;pixels[j]=value>>16;pixels[j+1]=(value>>8)&255;pixels[j+2]=value&255;pixels[j+3]=255}
+    }else if(unlit){
+      for(let i=0;i<heights.length;i++){const j=i*4,value=elevationColor(heights[i]);pixels[j]=value[0];pixels[j+1]=value[1];pixels[j+2]=value[2]}
     }else{
     const strength=Math.max(0,Math.min(1,Number(query.get('strength')||0)/100));
     const detailed=query.get('style')!=='legacy',exaggeration=Math.max(0,Math.min(80,Number(query.get('exaggeration')??10)||0));

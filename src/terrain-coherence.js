@@ -1,6 +1,5 @@
-// Pick one DEM level that is already present for every visible terrain tile.
-// Mixing a loaded child with a neighbour's coarser parent creates a vertical
-// wall when their elevations differ, especially with exaggerated mountains.
+// Prefer a DEM level already present for every visible terrain tile. When a
+// new tile enters the view, preserve the established level for existing peaks.
 function visibleDemTiles(tiles,source,deltaZoom){
   const min=source.minzoom??0,max=source.maxzoom??22,visible=[];
   for(const tile of tiles){
@@ -8,6 +7,7 @@ function visibleDemTiles(tiles,source,deltaZoom){
     const ideal=Math.max(min,Math.min(max,id.overscaledZ-deltaZoom));
     const sourceId=id.scaledTo(ideal);
     if(source.hasTile&&!source.hasTile(sourceId))continue;
+    if(source.__peakmapRegionCoreTile&&!source.__peakmapRegionCoreTile(sourceId))continue;
     visible.push({id,ideal});
   }
   return visible;
@@ -31,26 +31,26 @@ export function sharedLoadedDemZoom(tiles,manager,source,deltaZoom=1){
 
 // MapLibre uses its own parent fallback for every terrain tile independently.
 // Until the requested level is complete, use the highest common loaded
-// parent for the whole view, then switch together. Until any common level is
-// ready, keep the whole surface flat instead of exposing partial tall walls.
+// parent for the whole view, then switch together. Newly visible tiles may
+// temporarily use their own parent without forcing the whole view to downgrade.
 export function configureCoherentTerrain(map,{coarsePointer=globalThis.matchMedia?.('(pointer: coarse)').matches===true||/Android/i.test(globalThis.navigator?.userAgent||''),now=()=>performance.now(),setTimer=setTimeout,clearTimer=clearTimeout}={}){
   const terrain=map.terrain,manager=terrain?.tileManager;
   if(!manager||manager.__peakCoherent)return;
   if(typeof manager.update!=='function'||typeof manager.getSourceTile!=='function'||typeof manager.findTileInCaches!=='function')return;
   const update=manager.update.bind(manager),getSourceTile=manager.getSourceTile.bind(manager);
   manager.__peakCoherent=true;manager.__peakSharedZoom=null;
-  const duration=650;
+  const duration=650,tileTransitions=new Map();
+  const blendForTile=tileID=>manager.__peakTransition||tileTransitions.get(tileID.key)?.transition;
+  const blendProgress=t=>t?terrainBlendProgress(t.started,now(),duration):1;
   const transitionProgress=()=>{
-    const t=manager.__peakTransition;
-    if(!t)return 1;
-    return terrainBlendProgress(t.started,now(),duration);
+    return blendProgress(manager.__peakTransition);
   };
   // The previous texture is looked up separately for each terrain tile. When
   // that tile wasn't present before the pan, it uses the new texture directly.
   if(typeof terrain.getTerrainData==='function'){
     const getTerrainData=terrain.getTerrainData.bind(terrain);
     terrain.getTerrainData=function(tileID){
-      const current=getTerrainData(tileID),transition=manager.__peakTransition,mix=transitionProgress();
+      const current=getTerrainData(tileID),transition=blendForTile(tileID),mix=blendProgress(transition);
       if(!transition||mix>=1||!current.tile?.dem)return current;
       manager.__peakForcedLevel=transition.from;
       let previous;
@@ -65,13 +65,13 @@ export function configureCoherentTerrain(map,{coarsePointer=globalThis.matchMedi
   if(typeof coverage?.getSampler==='function'&&typeof coverage._createElevationSampler==='function'){
     const getSampler=coverage.getSampler.bind(coverage);
     coverage.getSampler=function(tileID){
-      const current=getSampler(tileID),transition=manager.__peakTransition;
+      const current=getSampler(tileID),transition=blendForTile(tileID);
       if(!current||!transition)return current;
       manager.__peakForcedLevel=transition.from;
       let previous;
       try{previous=coverage._createElevationSampler(tileID)}finally{manager.__peakForcedLevel=undefined}
       if(!previous)return current;
-      return (x,y,extent)=>{const mix=transitionProgress();return previous(x,y,extent)*(1-mix)+current(x,y,extent)*mix};
+      return (x,y,extent)=>{const mix=blendProgress(transition);return previous(x,y,extent)*(1-mix)+current(x,y,extent)*mix};
     };
   }
   // Avoid repeatedly promoting the entire terrain while the camera is being
@@ -101,6 +101,10 @@ export function configureCoherentTerrain(map,{coarsePointer=globalThis.matchMedi
     // its DEM is loading. Tiles with no data remain empty until ready.
     if(level===null&&this.__peakSharedZoom!==null)level=this.__peakSharedZoom;
     const previous=this.__peakSharedZoom,canKeep=previous!==null&&ideal!==null&&previous<=ideal&&isDemLevelLoaded(visible,this,previous);
+    // A few newly visible tiles should not force every already-loaded peak
+    // back to a much coarser ancestor. Keep the current level at the same
+    // camera zoom; missing tiles temporarily use their own loaded parent.
+    if(previous!==null&&ideal!==null&&previous<=ideal&&level<previous&&visible.some(({id})=>this.findTileInCaches(id.scaledTo(previous).key)?.dem))level=previous;
     if(canKeep&&level!==previous&&this.__peakTransition&&transitionProgress()<1)level=previous;
     if(canKeep&&level>previous&&(map.isMoving?.()||now()<settleUntil))level=previous;
     // A newly resolved parent can briefly appear to be the target while the
@@ -120,16 +124,34 @@ export function configureCoherentTerrain(map,{coarsePointer=globalThis.matchMedi
       if(refinementTimer!==null){clearTimer(refinementTimer);refinementTimer=null}
       this.__peakTransition=from!==null&&level!==null?{from,started:now()}:null;
     }
+    // A tile entering the view may initially use a parent while its own DEM
+    // loads. Blend just that tile when the finer data arrives; the other peaks
+    // retain their height. Keep CPU picking on the same transition.
+    const activeKeys=new Set();let tileChanged=false,blending=false;
+    for(const {id} of visible){
+      activeKeys.add(id.key);
+      const current=this.getSourceTile(id,true),z=current?.tileID?.overscaledZ;
+      const state=tileTransitions.get(id.key);
+      if(!state){tileTransitions.set(id.key,{z});continue}
+      if(levelChanged){state.z=z;state.transition=null;continue}
+      if(z!==state.z){
+        state.transition=z!==undefined&&state.z!==undefined&&z>state.z?{from:state.z,started:now()}:null;
+        state.z=z;tileChanged=true;
+      }
+      if(state.transition){if(blendProgress(state.transition)>=1)state.transition=null;else blending=true}
+    }
+    for(const key of tileTransitions.keys())if(!activeKeys.has(key))tileTransitions.delete(key);
+    if(blending)map.triggerRepaint?.();
     if(this.__peakTransition){if(transitionProgress()>=1)this.__peakTransition=null;else map.triggerRepaint?.()}
-    return changed||levelChanged;
+    return changed||levelChanged||tileChanged;
   };
   manager.getSourceTile=function(tileID,searchForDEM){
     const level=this.__peakForcedLevel??this.__peakSharedZoom,source=this.tileManager._source;
     if(searchForDEM&&level===null)return undefined;
     if(searchForDEM&&level!==null){
-      const z=Math.max(source.minzoom??0,Math.min(level,source.maxzoom??22,tileID.overscaledZ-this.deltaZoom));
-      const tile=this.findTileInCaches(tileID.scaledTo(z).key);
-      return tile?.dem?tile:undefined;
+      let z=Math.max(source.minzoom??0,Math.min(level,source.maxzoom??22,tileID.overscaledZ-this.deltaZoom));
+      for(;z>=(source.minzoom??0);z--){const tile=this.findTileInCaches(tileID.scaledTo(z).key);if(tile?.dem)return tile}
+      return undefined;
     }
     return getSourceTile(tileID,searchForDEM);
   };

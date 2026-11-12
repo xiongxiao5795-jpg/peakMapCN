@@ -55,12 +55,14 @@ function makeWorkerPool(workerCount=2) {
   });
 }
 export function registerTerrainProtocols(maplibre,{onImagerySuccess=()=>{},onImageryFailure=()=>{}}={}){
-  const workerRequest=makeWorkerPool(),imageryRequest=makeWorkerPool(3);
+  // DEM tiles must not wait behind expensive shadow/analysis jobs when the
+  // camera moves. Keep a separate worker for derived terrain layers.
+  const workerRequest=makeWorkerPool(),derivedRequest=makeWorkerPool(1),imageryRequest=makeWorkerPool(3);
   for(const [scheme,chinaOnly,color,kind] of [['dem-china',true,false,'terrain'],['dem-world',false,false,'terrain'],['relief-china',true,true,'terrain'],['relief-world',false,true,'terrain'],['shade-china',true,true,'shade'],['shade-world',false,true,'shade'],['multi-china',true,'multi','terrain'],['multi-world',false,'multi','terrain'],['slope-china',true,'slope','terrain'],['slope-world',false,'slope','terrain'],['aspect-china',true,'aspect','terrain'],['aspect-world',false,'aspect','terrain'],['imagery-china',true,false,'imagery'],['imagery-world',false,false,'imagery']]){
     maplibre.addProtocol(scheme,async(params,controller)=>{
       try{
         const region=regionForUrl(params.url);
-        const pool=kind==='imagery'?imageryRequest:workerRequest;
+        const pool=kind==='imagery'?imageryRequest:kind==='terrain'&&!color?workerRequest:derivedRequest;
         const result=pool?await pool(params,controller,chinaOnly,color,kind,region):kind==='imagery'?await processImageryTile(params,controller,chinaOnly,region):await processTerrainTile(params,controller,chinaOnly,kind==='shade'?'shade':color,region);
         if(kind==='imagery'&&!result.outside&&!controller.signal.aborted)onImagerySuccess();
         return {data:result.data};

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {stableTerrainTileZoom,uniformImageryZoom,configureTerrainLod,configureMobileTerrainTextures,limitTerrainSkirts,configureTerrainMesh} from '../src/terrain-lod.js';
+import {stableTerrainTileZoom,uniformImageryZoom,terrainBudgetBounds,configureTerrainLod,configureTerrainTextures,limitTerrainSkirts,configureTerrainMesh} from '../src/terrain-lod.js';
 import {readFileSync} from 'node:fs';
 import {patchMapLibreTerrain} from '../build/patch-maplibre-terrain.js';
 
@@ -42,6 +42,14 @@ test('影像整个视野共用级别，并限制大视野瓦片数量',()=>{
   assert.equal(satellite.calculateTileZoom(9,1,1,1),satellite.calculateTileZoom(9,100,1,1));
 });
 
+test('选中行政区时按区域而非大面积空白控制瓦片层级',()=>{
+  const region=[112.5,22.3,113.2,23],wide=[[100,10],[125,40]],narrow=[[110,20],[115,26]];
+  assert.deepEqual(terrainBudgetBounds(wide,region),[[112.5,22.3],[113.2,23]]);
+  assert.deepEqual(terrainBudgetBounds(narrow,region),terrainBudgetBounds(wide,region));
+  assert.deepEqual(terrainBudgetBounds(wide,null),wide);
+  assert.ok(uniformImageryZoom(10,terrainBudgetBounds(wide,region),96)>uniformImageryZoom(10,wide,96));
+});
+
 test('光影与设色使用地形的数据层级，不因纹理尺寸不同而多请求层级',()=>{
   for(const demSize of [128,256,512]){
     const dem={tileSize:demSize},shade={tileSize:256},relief={tileSize:demSize};
@@ -63,13 +71,13 @@ test('地形绘制与高程数据使用同一个层级规则，依赖升级时�
   assert.throws(()=>patchMapLibreTerrain('incompatible version'),/no longer matches/);
 });
 
-test('触屏设备减少地形纹理尺寸并在重建后重新应用',()=>{
+test('减少地形纹理尺寸并在重建后重新应用',()=>{
   let releases=0;const map={terrain:{qualityFactor:2,tileManager:{tileSize:512,releaseAllRTT(){releases++}}},painter:{renderToTexture:{rttSize:1024}}};
-  configureMobileTerrainTextures(map,true);
+  configureTerrainTextures(map);
   assert.equal(map.painter.renderToTexture.rttSize,512);assert.equal(releases,1);
-  configureMobileTerrainTextures(map,true);assert.equal(releases,1);
-  map.painter.renderToTexture={rttSize:1024};configureMobileTerrainTextures(map,false);
-  assert.equal(map.painter.renderToTexture.rttSize,1024);
+  configureTerrainTextures(map);assert.equal(releases,1);
+  map.painter.renderToTexture={rttSize:1024};configureTerrainTextures(map);
+  assert.equal(map.painter.renderToTexture.rttSize,512);assert.equal(releases,2);
 });
 
 test('接缝遮挡有高度上限，地形重建后仍可重新配置',()=>{
@@ -81,8 +89,8 @@ test('接缝遮挡有高度上限，地形重建后仍可重新配置',()=>{
 });
 
 
-test('地形网格加密后清理旧网格，触屏设备采用较低密度',()=>{
-  let destroyed=0,repaints=0;const map={terrain:{meshSize:128,_meshCache:{old:{destroy(){destroyed++}}},tileManager:{releaseAllRTT(){}}},triggerRepaint(){repaints++}};
-  configureTerrainMesh(map,false);assert.equal(map.terrain.meshSize,192);assert.equal(destroyed,1);assert.equal(repaints,1);
+test('调整地形网格时清理旧网格，桌面使用稳定的网格密度',()=>{
+  let destroyed=0,repaints=0;const map={terrain:{meshSize:192,_meshCache:{old:{destroy(){destroyed++}}},tileManager:{releaseAllRTT(){}}},triggerRepaint(){repaints++}};
+  configureTerrainMesh(map,false);assert.equal(map.terrain.meshSize,128);assert.equal(destroyed,1);assert.equal(repaints,1);
   configureTerrainMesh(map,false);assert.equal(repaints,1);configureTerrainMesh(map,true);assert.equal(map.terrain.meshSize,160);
 });

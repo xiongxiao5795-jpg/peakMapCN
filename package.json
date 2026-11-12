@@ -9,6 +9,7 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173 --strictPort",
     "test": "node --test",
+    "test:isolation": "node scripts/check-isolated-terrain.mjs",
     "dev:lan": "vite --host 0.0.0.0 --port 53257 --strictPort"
   },
   "dependencies": {

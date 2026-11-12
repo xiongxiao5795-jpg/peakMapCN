@@ -19,12 +19,12 @@ export function addTerrainHillshade(map,visible=true){
 }
 
 // Vector overlays and the optional raster image are draped by MapLibre on the terrain.
-export function addReferenceLayers(map,chinaOnly,lighting){
+export function addReferenceLayers(map,chinaOnly,lighting,lightingEnabled=false){
   map.addSource('satellite',{type:'raster',tiles:[imageryTemplate(chinaOnly)],tileSize:256,maxzoom:19});
   map.addLayer({id:'satellite',type:'raster',source:'satellite',paint:{'raster-fade-duration':150,'raster-saturation':0.08,'raster-contrast':0.03}},'admin-hit');
-  addTerrainHillshade(map);
+  addTerrainHillshade(map,lightingEnabled);
   map.addSource('satellite-shade',{type:'raster',tiles:[tileTemplate('shade',chinaOnly,lighting)],tileSize:256,maxzoom:12});
-  map.addLayer({id:'satellite-shade',type:'raster',source:'satellite-shade',paint:{'raster-fade-duration':150,'raster-opacity':0,'raster-opacity-transition':{duration:0}}},'admin-hit');
+  map.addLayer({id:'satellite-shade',type:'raster',source:'satellite-shade',layout:{visibility:lightingEnabled?'visible':'none'},paint:{'raster-fade-duration':150,'raster-opacity':0,'raster-opacity-transition':{duration:0}}},'admin-hit');
   bindShadeReadiness(map);
   map.addSource('reference',{type:'vector',url:'https://tiles.openfreemap.org/planet',maxzoom:14});
   const before='admin-hit', common={type:'line',source:'reference','source-layer':'transportation',layout:{'line-join':'round','line-cap':'round'}};
