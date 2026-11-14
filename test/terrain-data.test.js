@@ -32,6 +32,16 @@ test('在线细节请求失败不会把概览伪装成已加载的细节瓦片',
   }finally{globalThis.fetch=oldFetch;if(oldNavigator)Object.defineProperty(globalThis,'navigator',oldNavigator);else delete globalThis.navigator}
 });
 
+test('不请求概览包中不存在的低级瓦片',async()=>{
+  const oldFetch=globalThis.fetch,oldBitmap=globalThis.createImageBitmap,calls=[];
+  try{
+    globalThis.fetch=async url=>{calls.push(String(url));return {ok:true,blob:async()=>new Blob(['detail'])}};
+    globalThis.createImageBitmap=async()=>({width:512,height:512});
+    await loadTerrainBitmap(2,3,0,true,new AbortController().signal);
+    assert.deepEqual(calls,['https://tiles.mapterhorn.com/2/3/0.webp']);
+  }finally{globalThis.fetch=oldFetch;globalThis.createImageBitmap=oldBitmap}
+});
+
 test('选择 AWS 时明确请求 AWS 原始高程，不会悄悄替换为 Mapterhorn 离线概览',async()=>{
   const oldFetch=globalThis.fetch,oldBitmap=globalThis.createImageBitmap,oldNavigator=Object.getOwnPropertyDescriptor(globalThis,'navigator'),calls=[];
   try{

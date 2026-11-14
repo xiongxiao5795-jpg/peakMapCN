@@ -1,3 +1,5 @@
+import {hasOverviewTile} from './terrain-data.js';
+
 // Prefer a DEM level already present for every visible terrain tile. When a
 // new tile enters the view, preserve the established level for existing peaks.
 function visibleDemTiles(tiles,source,deltaZoom){
@@ -29,6 +31,24 @@ export function sharedLoadedDemZoom(tiles,manager,source,deltaZoom=1){
   return null;
 }
 
+// Request the bundled z6 parents before online detail, so they cannot be
+// trapped behind slow network jobs in the DEM worker queue.
+export function prioritizeOverviewTerrainTiles(ideal,normal,source,isolated=false){
+  const template=source.tiles?.[0]||'';
+  if((!template.startsWith('dem-china:')&&!isolated)||template.includes('source=aws'))return normal;
+  const overview=[],seen=new Set();
+  for(const tile of ideal){
+    if(tile.canonical.z<6)continue;
+    const parent=tile.scaledTo(6),{z,x,y}=parent.canonical;
+    if(!hasOverviewTile(z,x,y)||(source.hasTile&&!source.hasTile(parent))||seen.has(parent.key))continue;
+    seen.add(parent.key);overview.push(parent);
+  }
+  // Existing z0–z6 ancestors must also come before remote tiles.
+  const ordered=[...overview,...normal.filter(tile=>tile.canonical.z<=6),...normal.filter(tile=>tile.canonical.z>6)],result=[];
+  seen.clear();for(const tile of ordered)if(!seen.has(tile.key)){seen.add(tile.key);result.push(tile)}
+  return result;
+}
+
 // MapLibre uses its own parent fallback for every terrain tile independently.
 // Until the requested level is complete, use the highest common loaded
 // parent for the whole view, then switch together. Newly visible tiles may
@@ -38,6 +58,12 @@ export function configureCoherentTerrain(map,{coarsePointer=globalThis.matchMedi
   if(!manager||manager.__peakCoherent)return;
   if(typeof manager.update!=='function'||typeof manager.getSourceTile!=='function'||typeof manager.findTileInCaches!=='function')return;
   const update=manager.update.bind(manager),getSourceTile=manager.getSourceTile.bind(manager);
+  const sourceManager=manager.tileManager;
+  if(typeof sourceManager?._addTerrainIdealTiles==='function'&&!sourceManager.__peakOverviewPriority){
+    const add=sourceManager._addTerrainIdealTiles.bind(sourceManager);
+    sourceManager._addTerrainIdealTiles=ideal=>prioritizeOverviewTerrainTiles(ideal,add(ideal),sourceManager._source,!!map.__peakmapRegionIsolated);
+    sourceManager.__peakOverviewPriority=true;
+  }
   manager.__peakCoherent=true;manager.__peakSharedZoom=null;
   const duration=650,tileTransitions=new Map();
   const blendForTile=tileID=>manager.__peakTransition||tileTransitions.get(tileID.key)?.transition;
@@ -110,7 +136,10 @@ export function configureCoherentTerrain(map,{coarsePointer=globalThis.matchMedi
     // A newly resolved parent can briefly appear to be the target while the
     // terrain renderer is still discovering the next level. Require a quiet
     // interval on touch devices, and wait longer if finer tiles are pending.
-    if(coarsePointer&&canKeep&&level>previous){
+    // A completed bundled overview can be shown immediately. The longer
+    // settling policy is only needed for online detail above z6.
+    const bundledOverview=level<=6&&map.__peakTerrainSource!=='aws'&&((source.tiles?.[0]||'').startsWith('dem-china:')||map.__peakmapRegionIsolated);
+    if(coarsePointer&&canKeep&&level>previous&&!bundledOverview){
       const time=now();refinementStarted??=time;
       if(refinementCandidate!==level){refinementCandidate=level;refinementChanged=time}
       const deadline=10000-(time-refinementStarted),quiet=1400-(time-refinementChanged);
@@ -147,7 +176,14 @@ export function configureCoherentTerrain(map,{coarsePointer=globalThis.matchMedi
   };
   manager.getSourceTile=function(tileID,searchForDEM){
     const level=this.__peakForcedLevel??this.__peakSharedZoom,source=this.tileManager._source;
-    if(searchForDEM&&level===null)return undefined;
+    if(searchForDEM&&level===null){
+      // During startup a complete shared level may not exist yet. Show any
+      // local overview parent already loaded, without mixing in detail tiles.
+      for(let z=Math.min(6,source.maxzoom??22,tileID.overscaledZ-this.deltaZoom);z>=(source.minzoom??0);z--){
+        const tile=this.findTileInCaches(tileID.scaledTo(z).key);if(tile?.dem)return tile;
+      }
+      return undefined;
+    }
     if(searchForDEM&&level!==null){
       let z=Math.max(source.minzoom??0,Math.min(level,source.maxzoom??22,tileID.overscaledZ-this.deltaZoom));
       for(;z>=(source.minzoom??0);z--){const tile=this.findTileInCaches(tileID.scaledTo(z).key);if(tile?.dem)return tile}

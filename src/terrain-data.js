@@ -42,7 +42,7 @@ async function fetchDetail(z,x,y,signal,source){
 
 export async function loadTerrainBitmap(z,x,y,chinaOnly,signal,source='mapterhorn'){
   if(source==='aws')return fetchDetail(z,x,y,signal,source);
-  if(chinaOnly&&z<=OVERVIEW_ZOOM){
+  if(chinaOnly&&z<=OVERVIEW_ZOOM&&hasOverviewTile(z,x,y)){
     try{return await fetchOverview(z,x,y,signal)}catch(error){if(signal.aborted)throw error}
   }
   // When explicitly offline, use the overview consistently. Online failures must

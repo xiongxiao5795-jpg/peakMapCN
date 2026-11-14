@@ -1,8 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {sharedLoadedDemZoom,configureCoherentTerrain,terrainBlendProgress} from '../src/terrain-coherence.js';
+import {sharedLoadedDemZoom,configureCoherentTerrain,terrainBlendProgress,prioritizeOverviewTerrainTiles} from '../src/terrain-coherence.js';
 
-function id(z,x,y){return {overscaledZ:z,key:`${z}/${x}/${y}`,scaledTo(next){const n=2**(z-next);return id(next,Math.floor(x/n),Math.floor(y/n))}}}
+function id(z,x,y){return {overscaledZ:z,canonical:{z,x,y},key:`${z}/${x}/${y}`,scaledTo(next){const n=2**(z-next);return id(next,Math.floor(x/n),Math.floor(y/n))}}}
+
+test('优先排队本地概览父瓦片，不影响其他数据源',()=>{
+  const detail=id(8,202,105),parent=id(5,25,13),source={tiles:['dem-china://tiles/{z}/{x}/{y}.webp?source=mapterhorn'],hasTile:()=>true};
+  assert.deepEqual(prioritizeOverviewTerrainTiles([detail],[detail,parent],source).map(t=>t.key),['6/50/26','5/25/13','8/202/105']);
+  source.tiles=['dem-china://tiles/{z}/{x}/{y}.webp?source=aws'];
+  assert.deepEqual(prioritizeOverviewTerrainTiles([detail],[detail,parent],source).map(t=>t.key),['8/202/105','5/25/13']);
+});
+
+test('手机上已加载的本地概览立即提升，不等待远程细节',()=>{
+  const tiles=[{tileID:id(9,404,210)}],source={minzoom:0,maxzoom:12,hasTile:()=>true,tiles:['dem-china://tiles/{z}/{x}/{y}.webp?source=mapterhorn']};
+  const loaded=new Map([['1/1/0',{dem:{}}]]);let time=1000;
+  const manager={deltaZoom:1,tileManager:{_source:source},update:()=>false,getRenderableTiles:()=>tiles,findTileInCaches:key=>loaded.get(key),getSourceTile:()=>undefined};
+  configureCoherentTerrain({terrain:{tileManager:manager}},{coarsePointer:true,now:()=>time,setTimer:()=>1,clearTimer:()=>{}});manager.update();assert.equal(manager.__peakSharedZoom,1);
+  loaded.set('6/50/26',{dem:{}});time+=1;manager.update();assert.equal(manager.__peakSharedZoom,6);
+});
 
 test('邻接高程尚未全部加载时统一使用共同父级，完成后一起升级',()=>{
   const tiles=[{tileID:id(8,40,40)},{tileID:id(8,42,40)}];
@@ -48,11 +63,13 @@ test('新瓦片未就绪时不降低现有山峰层级，并平滑补充局部�
   time+=325;manager.update();assert.equal(terrain.getTerrainData(tiles[1].tileID).__peakPrevious,undefined);assert.equal(sample(0,0,1),200);
 });
 
-test('没有完整共同层级时不提前展示局部高地形',()=>{
+test('没有完整共同层级时可展示本地概览，但不提前展示局部细节',()=>{
   const tiles=[{tileID:id(8,40,40)},{tileID:id(8,42,40)}],child={dem:{},tileID:id(7,20,20)},loaded=new Map([[child.tileID.key,child]]),source={minzoom:0,maxzoom:12,hasTile:()=>true};
   const manager={deltaZoom:1,tileManager:{_source:source},update:()=>false,getRenderableTiles:()=>tiles,findTileInCaches:key=>loaded.get(key),getSourceTile:()=>child};
   configureCoherentTerrain({terrain:{tileManager:manager}});manager.update();
   assert.equal(manager.getSourceTile(tiles[0].tileID,true),undefined);
+  const parent={dem:{},tileID:id(6,10,10)};loaded.set(parent.tileID.key,parent);
+  assert.equal(manager.getSourceTile(tiles[0].tileID,true),parent);
   assert.equal(manager.getSourceTile(tiles[0].tileID,false),child);
 });
 
