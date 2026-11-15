@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: public-website
@@ -16,6 +18,9 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -27,20 +32,10 @@ jobs:
           npm ci
           npm test
           npm run build
-      - name: Check out public website repository
-        uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
         with:
-          repository: xiongxiao5795-jpg/peakmapcn-web
-          ssh-key: ${{ secrets.PAGES_DEPLOY_KEY }}
-          path: .pages-publish
-      - name: Publish static files
-        run: |
-          find .pages-publish -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
-          cp -a dist/. .pages-publish/
-          touch .pages-publish/.nojekyll
-          git -C .pages-publish config user.name 'github-actions[bot]'
-          git -C .pages-publish config user.email 'github-actions[bot]@users.noreply.github.com'
-          git -C .pages-publish add -A
-          if git -C .pages-publish diff --cached --quiet; then exit 0; fi
-          git -C .pages-publish commit -m "Deploy ${GITHUB_SHA}"
-          git -C .pages-publish push origin HEAD:main
+          path: dist
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4

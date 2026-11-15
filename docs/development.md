@@ -21,7 +21,7 @@ npm run preview
 
 ## 网页部署
 
-推送到 `main` 后，GitHub Actions 运行测试和构建，并用部署密钥将 `dist` 同步到公开的 `peakmapcn-web` 仓库。`public/README.md` 随构建复制到公开仓库，修改公开网站说明应编辑此文件。公开仓库中的构建产物均可被访问。
+推送到 `main` 后，GitHub Actions 运行测试和构建，并通过 GitHub Pages 将 `dist` 部署到当前仓库的网站。仓库及构建产物均可公开访问。
 
 ## Android
 

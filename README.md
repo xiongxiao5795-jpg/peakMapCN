@@ -2,7 +2,7 @@
 
 探索中国的山脉、地形和行政区，用卫星影像和可调整的立体地形观察大地。
 
-**[打开网页版地图](https://xiongxiao5795-jpg.github.io/peakmapcn-web/)** · 手机、平板和电脑均可使用
+**[打开网页版地图](https://xiongxiao5795-jpg.github.io/peakMapCN/)** · 手机、平板和电脑均可使用
 
 ## 快速开始
 
@@ -25,6 +25,10 @@
 地形高度倍率只改变视觉效果，不改变原始海拔；地形、地名和行政边界可能存在误差或遗漏，地图未经标准地图审核，不应用于导航、测量或专业判断。
 
 地形、影像及参考图层由 [Mapterhorn](https://mapterhorn.com/attribution)、[AWS Terrain Tiles](https://registry.opendata.aws/terrain-tiles/)、[Esri World Imagery](https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9)、[OpenFreeMap](https://openfreemap.org/) 和 [GeoNames](https://www.geonames.org/) 等提供，更多署名见地图底部。
+
+## Android 应用
+
+可在 [GitHub Releases](https://github.com/xiongxiao5795-jpg/peakMapCN/releases/latest) 下载最新 Android 安装包。
 
 ## 开发与构建
 
